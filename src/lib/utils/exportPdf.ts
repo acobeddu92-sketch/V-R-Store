@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { BrilinkDailyTransaction, MonthlyRecapRow, Investor, BrilinkCapitalEntry, Product } from '../types/database';
+import { BrilinkDailyTransaction, MonthlyRecapRow, Investor, BrilinkCapitalEntry, Product, CustomerFundEntry } from '../types/database';
 import { formatRupiah } from './currency';
 import { MONTH_NAMES_ID, formatDateID } from './date';
 
@@ -294,3 +294,83 @@ export function exportInvestorsToPdf(investors: Investor[]) {
 
   doc.save(`VR_Store_Dividen_${new Date().toISOString().split('T')[0]}.pdf`);
 }
+
+/**
+ * Ekspor Data Uang Nasabah ke PDF (A4 Portrait)
+ */
+export function exportCustomerFundsToPdf(
+  funds: CustomerFundEntry[],
+  month: number,
+  year: number,
+  filterDate?: string
+) {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const monthName = MONTH_NAMES_ID[month - 1];
+  const dateLabel = filterDate ? `Tanggal: ${formatDateID(filterDate, false)}` : `Periode: ${monthName.toUpperCase()} ${year}`;
+
+  // Header V_R Store
+  doc.setFontSize(15);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(225, 29, 72); // Rose
+  doc.text('V_R STORE — SISTEM BRILINK', 14, 15);
+
+  doc.setFontSize(11);
+  doc.setTextColor(30, 41, 59);
+  doc.text(`REKAPITULASI DAFTAR UANG NASABAH (${dateLabel})`, 14, 22);
+
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Dicetak pada: ${formatDateID(new Date(), true)}`, 14, 27);
+
+  // Table Body
+  const tableData = funds.map((f, idx) => [
+    idx + 1,
+    formatDateID(f.entry_date, true),
+    f.customer_name,
+    f.notes || '-',
+    formatRupiah(f.amount),
+  ]);
+
+  const totalAmount = funds.reduce((sum, f) => sum + (Number(f.amount) || 0), 0);
+
+  const totalRow = [
+    'TOTAL',
+    `${funds.length} Catatan`,
+    dateLabel,
+    'Total Uang Nasabah',
+    formatRupiah(totalAmount),
+  ];
+
+  autoTable(doc, {
+    startY: 31,
+    head: [[
+      'No',
+      'Hari / Tanggal',
+      'Nama Nasabah',
+      'Keterangan / Keperluan',
+      'Nominal (Rp)',
+    ]],
+    body: [...tableData, totalRow],
+    theme: 'grid',
+    styles: { fontSize: 8.5, cellPadding: 2.5, halign: 'left' },
+    headStyles: { fillColor: [225, 29, 72], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 12 },
+      1: { halign: 'center', cellWidth: 35 },
+      2: { halign: 'left', cellWidth: 45 },
+      3: { halign: 'left' },
+      4: { halign: 'right', cellWidth: 38 },
+    },
+    didParseCell: (data) => {
+      if (data.row.index === tableData.length) {
+        data.cell.styles.fontStyle = 'bold';
+        data.cell.styles.fillColor = [255, 241, 242]; // Rose-50
+        data.cell.styles.textColor = [190, 18, 60]; // Rose-700
+      }
+    },
+  });
+
+  doc.save(`VR_Store_Uang_Nasabah_${filterDate || `${year}_${month}`}.pdf`);
+}
+

@@ -6,6 +6,7 @@ import {
   BrilinkPeriod,
   BrilinkDailyTransaction,
   BrilinkCapitalEntry,
+  CustomerFundEntry,
   Investor,
   MonthlyRecapRow,
   AnnualReportSummary,
@@ -222,6 +223,42 @@ export const DEFAULT_INVESTORS: Investor[] = [
     join_date: '2026-10-05', // Baru bergabung beberapa hari lalu (< 30 hari)
     status: 'active',
     notes: 'Investor baru bergabung bulan Oktober (Belum cukup 1 bulan)',
+  },
+];
+
+// Seed default customer funds
+export const DEFAULT_CUSTOMER_FUNDS: CustomerFundEntry[] = [
+  {
+    id: 'cf-1001-1',
+    entry_date: '2026-10-01',
+    customer_name: 'Bpk. Hendra Wijaya',
+    notes: 'Titipan transfer antar bank BRI',
+    amount: 3000000,
+    created_at: '2026-10-01T08:30:00Z',
+  },
+  {
+    id: 'cf-1001-2',
+    entry_date: '2026-10-01',
+    customer_name: 'Ibu Hj. Siti Aminah',
+    notes: 'Tarik tunai pensiun belum diambil',
+    amount: 2000000,
+    created_at: '2026-10-01T10:15:00Z',
+  },
+  {
+    id: 'cf-1002-1',
+    entry_date: '2026-10-02',
+    customer_name: 'Pak Joko Susilo',
+    notes: 'Titipan pembayaran belanja online / e-commerce',
+    amount: 4800000,
+    created_at: '2026-10-02T09:00:00Z',
+  },
+  {
+    id: 'cf-1003-1',
+    entry_date: '2026-10-03',
+    customer_name: 'Toko Berkah Mandiri',
+    notes: 'Titipan setor tunai kas mingguan',
+    amount: 6500000,
+    created_at: '2026-10-03T11:45:00Z',
   },
 ];
 
@@ -522,6 +559,7 @@ class DataService {
   }
 
   async getDailyTransactions(periodId: string): Promise<BrilinkDailyTransaction[]> {
+    let list: BrilinkDailyTransaction[] = [];
     if (this.isSupabaseConfigured()) {
       const supabase = createClient();
       if (supabase) {
@@ -530,12 +568,34 @@ class DataService {
           .select('*')
           .eq('period_id', periodId)
           .order('transaction_date', { ascending: true });
-        if (!error && data) return data as BrilinkDailyTransaction[];
+        if (!error && data) list = data as BrilinkDailyTransaction[];
       }
+    } else {
+      list = getLocalItem<BrilinkDailyTransaction[]>('brilink_transactions', DEFAULT_TRANSACTIONS);
     }
 
-    const all = getLocalItem<BrilinkDailyTransaction[]>('brilink_transactions', DEFAULT_TRANSACTIONS);
-    return all
+    const allFunds = await this.getCustomerFunds();
+    const synced = list.map((t) => {
+      const fundsOnDate = allFunds.filter((f) => f.entry_date === t.transaction_date);
+      if (fundsOnDate.length > 0) {
+        const totalFunds = fundsOnDate.reduce((sum, f) => sum + (Number(f.amount) || 0), 0);
+        if (totalFunds !== t.customer_funds) {
+          const newIncome = calculateDailyIncome({
+            cash_amount: t.cash_amount,
+            brimo_balance: t.brimo_balance,
+            payfazz_balance: t.payfazz_balance,
+            brilian_balance: t.brilian_balance,
+            debt_notes: t.debt_notes,
+            daily_capital: t.daily_capital,
+            customer_funds: totalFunds,
+          });
+          return { ...t, customer_funds: totalFunds, daily_income: newIncome };
+        }
+      }
+      return t;
+    });
+
+    return synced
       .filter((t) => t.period_id === periodId)
       .sort((a, b) => a.transaction_date.localeCompare(b.transaction_date));
   }
@@ -704,6 +764,202 @@ class DataService {
     const current = await this.getCapitalEntries();
     const updated = current.filter((c) => c.id !== id);
     setLocalItem('brilink_capital', updated);
+    return true;
+  }
+
+  // ==========================================
+  // BRILINK: UANG NASABAH (TITIPAN / TARIK BELUM DIAMBIL)
+  // ==========================================
+  async getCustomerFunds(options?: { date?: string; month?: number; year?: number; search?: string }): Promise<CustomerFundEntry[]> {
+    let list: CustomerFundEntry[] = [];
+
+    if (this.isSupabaseConfigured()) {
+      const supabase = createClient();
+      if (supabase) {
+        let query = supabase.from('brilink_customer_funds').select('*').order('entry_date', { ascending: false });
+        if (options?.date) query = query.eq('entry_date', options.date);
+        const { data, error } = await query;
+        if (!error && data) list = data as CustomerFundEntry[];
+      }
+    } else {
+      list = getLocalItem<CustomerFundEntry[]>('customer_funds', DEFAULT_CUSTOMER_FUNDS);
+    }
+
+    if (options?.date) {
+      list = list.filter((f) => f.entry_date === options.date);
+    }
+
+    if (options?.month && options?.year) {
+      list = list.filter((f) => {
+        const parts = f.entry_date.split('-');
+        if (parts.length === 3) {
+          const y = parseInt(parts[0], 10);
+          const m = parseInt(parts[1], 10);
+          return y === options.year && m === options.month;
+        }
+        return false;
+      });
+    }
+
+    if (options?.search) {
+      const q = options.search.toLowerCase().trim();
+      list = list.filter((f) =>
+        f.customer_name.toLowerCase().includes(q) || (f.notes && f.notes.toLowerCase().includes(q))
+      );
+    }
+
+    return list.sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+  }
+
+  async getCustomerFundsByDate(date: string): Promise<CustomerFundEntry[]> {
+    return this.getCustomerFunds({ date });
+  }
+
+  async getCustomerFundsTotalByDate(date: string): Promise<number> {
+    const list = await this.getCustomerFunds({ date });
+    return list.reduce((sum, f) => sum + (Number(f.amount) || 0), 0);
+  }
+
+  // Sinkronisasi otomatis ke baris transaksi harian berdasarkan tanggal
+  async syncTransactionCustomerFunds(date: string): Promise<void> {
+    try {
+      const totalCustomerFunds = await this.getCustomerFundsTotalByDate(date);
+      const allTrx = getLocalItem<BrilinkDailyTransaction[]>('brilink_transactions', DEFAULT_TRANSACTIONS);
+      const targetIndex = allTrx.findIndex((t) => t.transaction_date === date);
+
+      if (targetIndex !== -1) {
+        const target = allTrx[targetIndex];
+        const newDailyIncome = calculateDailyIncome({
+          cash_amount: target.cash_amount,
+          brimo_balance: target.brimo_balance,
+          payfazz_balance: target.payfazz_balance,
+          brilian_balance: target.brilian_balance,
+          debt_notes: target.debt_notes,
+          daily_capital: target.daily_capital,
+          customer_funds: totalCustomerFunds,
+        });
+
+        const updatedTarget: BrilinkDailyTransaction = {
+          ...target,
+          customer_funds: totalCustomerFunds,
+          daily_income: newDailyIncome,
+          updated_at: new Date().toISOString(),
+        };
+
+        allTrx[targetIndex] = updatedTarget;
+        setLocalItem('brilink_transactions', allTrx);
+
+        if (this.isSupabaseConfigured()) {
+          const supabase = createClient();
+          if (supabase) {
+            await supabase
+              .from('brilink_daily_transactions')
+              .update({
+                customer_funds: totalCustomerFunds,
+                daily_income: newDailyIncome,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', target.id);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to sync transaction customer funds', e);
+    }
+  }
+
+  async createCustomerFund(fund: Omit<CustomerFundEntry, 'id'>): Promise<CustomerFundEntry> {
+    const newFund: CustomerFundEntry = {
+      ...fund,
+      id: `cf-${Date.now()}`,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (this.isSupabaseConfigured()) {
+      const supabase = createClient();
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('brilink_customer_funds')
+          .insert([fund])
+          .select()
+          .single();
+        if (!error && data) {
+          await this.syncTransactionCustomerFunds(fund.entry_date);
+          return data as CustomerFundEntry;
+        }
+      }
+    }
+
+    const current = getLocalItem<CustomerFundEntry[]>('customer_funds', DEFAULT_CUSTOMER_FUNDS);
+    const updated = [newFund, ...current];
+    setLocalItem('customer_funds', updated);
+    await this.syncTransactionCustomerFunds(fund.entry_date);
+    return newFund;
+  }
+
+  async updateCustomerFund(id: string, fund: Partial<CustomerFundEntry>): Promise<CustomerFundEntry> {
+    let targetDate = fund.entry_date;
+
+    if (this.isSupabaseConfigured()) {
+      const supabase = createClient();
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('brilink_customer_funds')
+          .update({ ...fund, updated_at: new Date().toISOString() })
+          .eq('id', id)
+          .select()
+          .single();
+        if (!error && data) {
+          await this.syncTransactionCustomerFunds(data.entry_date);
+          return data as CustomerFundEntry;
+        }
+      }
+    }
+
+    const current = getLocalItem<CustomerFundEntry[]>('customer_funds', DEFAULT_CUSTOMER_FUNDS);
+    const prevItem = current.find((c) => c.id === id);
+    if (!targetDate && prevItem) {
+      targetDate = prevItem.entry_date;
+    }
+
+    const updated = current.map((c) => (c.id === id ? { ...c, ...fund, updated_at: new Date().toISOString() } : c));
+    setLocalItem('customer_funds', updated);
+
+    const item = updated.find((c) => c.id === id);
+    if (!item) throw new Error('Data uang nasabah tidak ditemukan');
+
+    if (targetDate) {
+      await this.syncTransactionCustomerFunds(targetDate);
+    }
+    if (prevItem && prevItem.entry_date !== targetDate) {
+      await this.syncTransactionCustomerFunds(prevItem.entry_date);
+    }
+
+    return item;
+  }
+
+  async deleteCustomerFund(id: string): Promise<boolean> {
+    const current = getLocalItem<CustomerFundEntry[]>('customer_funds', DEFAULT_CUSTOMER_FUNDS);
+    const item = current.find((c) => c.id === id);
+    const targetDate = item?.entry_date;
+
+    if (this.isSupabaseConfigured()) {
+      const supabase = createClient();
+      if (supabase) {
+        const { error } = await supabase.from('brilink_customer_funds').delete().eq('id', id);
+        if (!error && targetDate) {
+          await this.syncTransactionCustomerFunds(targetDate);
+          return true;
+        }
+      }
+    }
+
+    const updated = current.filter((c) => c.id !== id);
+    setLocalItem('customer_funds', updated);
+    if (targetDate) {
+      await this.syncTransactionCustomerFunds(targetDate);
+    }
     return true;
   }
 
@@ -950,6 +1206,7 @@ class DataService {
         brilink_periods: getLocalItem<BrilinkPeriod[]>('brilink_periods', DEFAULT_PERIODS),
         brilink_transactions: getLocalItem<BrilinkDailyTransaction[]>('brilink_transactions', DEFAULT_TRANSACTIONS),
         brilink_capital: getLocalItem<BrilinkCapitalEntry[]>('brilink_capital', DEFAULT_CAPITAL),
+        customer_funds: await this.getCustomerFunds(),
         investors: await this.getInvestors(),
       },
     };
@@ -986,6 +1243,9 @@ class DataService {
       if (Array.isArray(payload.brilink_capital)) {
         setLocalItem('brilink_capital', payload.brilink_capital);
       }
+      if (Array.isArray(payload.customer_funds)) {
+        setLocalItem('customer_funds', payload.customer_funds);
+      }
       if (Array.isArray(payload.investors)) {
         setLocalItem('investors', payload.investors);
       }
@@ -1004,10 +1264,11 @@ class DataService {
 
   async resetToEmpty(): Promise<{ success: boolean; message: string }> {
     try {
-      // Kosongkan seluruh data dummy produk, transaksi, modal, dan investor
+      // Kosongkan seluruh data dummy produk, transaksi, modal, uang nasabah, dan investor
       setLocalItem('products', []);
       setLocalItem('brilink_transactions', []);
       setLocalItem('brilink_capital', []);
+      setLocalItem('customer_funds', []);
       setLocalItem('investors', []);
       // Reset kategori ke kategori bawaan standar
       setLocalItem('categories', DEFAULT_CATEGORIES);

@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { BrilinkDailyTransaction, MonthlyRecapRow, Investor, BrilinkCapitalEntry, Product } from '../types/database';
+import { BrilinkDailyTransaction, MonthlyRecapRow, Investor, BrilinkCapitalEntry, Product, CustomerFundEntry } from '../types/database';
 import { formatRupiah } from './currency';
 import { MONTH_NAMES_ID, formatDateID } from './date';
 
@@ -190,3 +190,40 @@ export function exportProductsToExcel(products: Product[]) {
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Daftar Produk');
   XLSX.writeFile(workbook, `VR_Store_Produk_${new Date().toISOString().split('T')[0]}.xlsx`);
 }
+
+/**
+ * Ekspor Data Uang Nasabah ke Excel
+ */
+export function exportCustomerFundsToExcel(
+  funds: CustomerFundEntry[],
+  month: number,
+  year: number,
+  filterDate?: string
+) {
+  const monthName = MONTH_NAMES_ID[month - 1];
+  const dateLabel = filterDate ? `Tanggal ${formatDateID(filterDate, false)}` : `Bulan ${monthName} ${year}`;
+  const totalNominal = funds.reduce((sum, f) => sum + (Number(f.amount) || 0), 0);
+
+  const rows = funds.map((f, idx) => ({
+    'No': idx + 1,
+    'Hari / Tanggal': formatDateID(f.entry_date, true),
+    'Nama Nasabah': f.customer_name,
+    'Keterangan / Keperluan': f.notes || '-',
+    'Nominal Uang Nasabah (Rp)': f.amount,
+  }));
+
+  // Baris Total
+  rows.push({
+    'No': 'TOTAL' as any,
+    'Hari / Tanggal': `${funds.length} Catatan Nasabah`,
+    'Nama Nasabah': dateLabel,
+    'Keterangan / Keperluan': 'Total Akumulasi Uang Nasabah',
+    'Nominal Uang Nasabah (Rp)': totalNominal,
+  });
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Uang Nasabah');
+  XLSX.writeFile(workbook, `VR_Store_Uang_Nasabah_${filterDate || `${year}_${month}`}.xlsx`);
+}
+

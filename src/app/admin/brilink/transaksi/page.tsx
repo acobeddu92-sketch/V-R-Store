@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
+import Link from 'next/link';
 import {
   FileSpreadsheet,
   Plus,
@@ -13,9 +14,13 @@ import {
   CheckCircle,
   Calculator,
   Info,
+  Eye,
+  Users,
+  ArrowUpRight,
+  X,
 } from 'lucide-react';
 import { dataService } from '@/lib/services/dataService';
-import { BrilinkPeriod, BrilinkDailyTransaction } from '@/lib/types/database';
+import { BrilinkPeriod, BrilinkDailyTransaction, CustomerFundEntry } from '@/lib/types/database';
 import { formatRupiah } from '@/lib/utils/currency';
 import { formatDateID, getDayNameID, MONTH_NAMES_ID } from '@/lib/utils/date';
 import { calculateDailyIncome } from '@/lib/utils/calculations';
@@ -57,6 +62,21 @@ export default function LaporanTransaksiPage() {
 
   // Delete Confirm
   const [deleteConfirm, setDeleteConfirm] = useState<BrilinkDailyTransaction | null>(null);
+
+  // Modal Rincian Uang Nasabah
+  const [customerFundModal, setCustomerFundModal] = useState<{
+    open: boolean;
+    date: string;
+    items: CustomerFundEntry[];
+    total: number;
+    loading: boolean;
+  }>({
+    open: false,
+    date: '',
+    items: [],
+    total: 0,
+    loading: false,
+  });
 
   const loadPeriods = async () => {
     try {
@@ -165,7 +185,45 @@ export default function LaporanTransaksiPage() {
     }
   };
 
-  const handleOpenTrxModal = (trx?: BrilinkDailyTransaction) => {
+  const handleOpenCustomerFunds = async (date: string) => {
+    setCustomerFundModal({
+      open: true,
+      date,
+      items: [],
+      total: 0,
+      loading: true,
+    });
+    try {
+      const items = await dataService.getCustomerFundsByDate(date);
+      const total = items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+      setCustomerFundModal({
+        open: true,
+        date,
+        items,
+        total,
+        loading: false,
+      });
+    } catch (e) {
+      console.error(e);
+      setCustomerFundModal((prev) => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleFormDateChange = async (newDate: string) => {
+    setFormDate(newDate);
+    if (newDate) {
+      try {
+        const autoCustomerFunds = await dataService.getCustomerFundsTotalByDate(newDate);
+        if (autoCustomerFunds > 0 || !editingTrx) {
+          setFormCustomerFunds(autoCustomerFunds);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+
+  const handleOpenTrxModal = async (trx?: BrilinkDailyTransaction) => {
     setFormError('');
     if (trx) {
       setEditingTrx(trx);
@@ -175,27 +233,41 @@ export default function LaporanTransaksiPage() {
       setFormBrimo(trx.brimo_balance);
       setFormPayfazz(trx.payfazz_balance);
       setFormBrilian(trx.brilian_balance);
-      setFormCustomerFunds(trx.customer_funds);
+
+      // Sinkronkan atau ambil total Uang Nasabah terkini pada tanggal transaksi
+      try {
+        const autoCustomerFunds = await dataService.getCustomerFundsTotalByDate(trx.transaction_date);
+        setFormCustomerFunds(autoCustomerFunds > 0 ? autoCustomerFunds : trx.customer_funds);
+      } catch (e) {
+        setFormCustomerFunds(trx.customer_funds);
+      }
+
       setFormDebt(trx.debt_notes);
       setFormDailyCapital(trx.daily_capital);
       setFormNotes(trx.notes || '');
     } else {
       setEditingTrx(null);
+      let initialDate = new Date().toISOString().split('T')[0];
       if (selectedPeriod) {
         const d = new Date();
         const y = selectedPeriod.year;
         const m = selectedPeriod.month < 10 ? `0${selectedPeriod.month}` : selectedPeriod.month;
-        const todayStr = d.toISOString().split('T')[0];
-        setFormDate(todayStr.startsWith(`${y}-${m}`) ? todayStr : `${y}-${m}-01`);
-      } else {
-        setFormDate(new Date().toISOString().split('T')[0]);
+        initialDate = initialDate.startsWith(`${y}-${m}`) ? initialDate : `${y}-${m}-01`;
       }
+      setFormDate(initialDate);
       setFormCount(1);
       setFormCash(0);
       setFormBrimo(0);
       setFormPayfazz(0);
       setFormBrilian(0);
-      setFormCustomerFunds(0);
+
+      try {
+        const autoCustomerFunds = await dataService.getCustomerFundsTotalByDate(initialDate);
+        setFormCustomerFunds(autoCustomerFunds);
+      } catch (e) {
+        setFormCustomerFunds(0);
+      }
+
       setFormDebt(0);
       setFormDailyCapital(25000000); // Default ke modal operasional aktif
       setFormNotes('');
@@ -456,7 +528,19 @@ export default function LaporanTransaksiPage() {
                     <td className="py-3 px-3 text-right">{formatRupiah(t.brimo_balance)}</td>
                     <td className="py-3 px-3 text-right">{formatRupiah(t.payfazz_balance)}</td>
                     <td className="py-3 px-3 text-right">{formatRupiah(t.brilian_balance)}</td>
-                    <td className="py-3 px-3 text-right text-rose-700 font-semibold">{formatRupiah(t.customer_funds)}</td>
+                    <td className="py-3 px-3 text-right">
+                      <div className="inline-flex items-center justify-end gap-1.5 w-full">
+                        <span className="text-rose-700 font-semibold">{formatRupiah(t.customer_funds)}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenCustomerFunds(t.transaction_date)}
+                          className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                          title="Lihat Rincian Uang Nasabah"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
                     <td className="py-3 px-3 text-right">{formatRupiah(t.debt_notes)}</td>
                     <td className="py-3 px-3 text-right text-amber-700 font-semibold">
                       {formatRupiah(t.daily_capital)}
@@ -567,7 +651,7 @@ export default function LaporanTransaksiPage() {
                     type="date"
                     required
                     value={formDate}
-                    onChange={(e) => setFormDate(e.target.value)}
+                    onChange={(e) => handleFormDateChange(e.target.value)}
                     className="w-full p-2.5 rounded-xl border border-slate-200 text-xs outline-none focus:border-blue-500 font-medium"
                   />
                   {formDate && (
@@ -647,7 +731,17 @@ export default function LaporanTransaksiPage() {
               {/* Uang Nasabah & Catatan Utang */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="font-bold text-rose-700">Uang Nasabah (Pengurang Rp) *</label>
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-rose-700">Uang Nasabah (Pengurang Rp) *</label>
+                    <Link
+                      href={formDate ? `/admin/brilink/uang-nasabah?date=${formDate}` : '/admin/brilink/uang-nasabah'}
+                      target="_blank"
+                      className="text-[10px] text-rose-600 hover:text-rose-800 font-semibold inline-flex items-center gap-0.5"
+                    >
+                      <span>Kelola Rincian</span>
+                      <ArrowUpRight className="w-3 h-3" />
+                    </Link>
+                  </div>
                   <input
                     type="number"
                     min="0"
@@ -655,7 +749,10 @@ export default function LaporanTransaksiPage() {
                     onChange={(e) => setFormCustomerFunds(Number(e.target.value))}
                     className="w-full p-2.5 rounded-xl border border-rose-200 text-xs outline-none focus:border-rose-500 bg-rose-50/20"
                   />
-                  <div className="text-[10px] text-rose-600 font-semibold">{formatRupiah(formCustomerFunds)}</div>
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-rose-600 font-semibold">{formatRupiah(formCustomerFunds)}</span>
+                    <span className="text-slate-400">Sinkron otomatis dengan Uang Nasabah</span>
+                  </div>
                 </div>
 
                 <div className="space-y-1">
@@ -793,6 +890,87 @@ export default function LaporanTransaksiPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL RINCIAN UANG NASABAH ================= */}
+      {customerFundModal.open && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 border border-slate-200 shadow-2xl space-y-4 animate-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">Rincian Uang Nasabah</h3>
+                  <p className="text-xs text-slate-500">
+                    {formatDateID(customerFundModal.date, true)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCustomerFundModal((prev) => ({ ...prev, open: false }))}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {customerFundModal.loading ? (
+              <div className="py-8 text-center text-xs text-slate-400">Memuat rincian uang nasabah...</div>
+            ) : customerFundModal.items.length > 0 ? (
+              <div className="space-y-3">
+                <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
+                  {customerFundModal.items.map((item, idx) => (
+                    <div key={item.id} className="p-3 flex items-center justify-between text-xs hover:bg-slate-50">
+                      <div>
+                        <div className="font-bold text-slate-900">{idx + 1}. {item.customer_name}</div>
+                        {item.notes && <div className="text-[11px] text-slate-500 mt-0.5">{item.notes}</div>}
+                      </div>
+                      <div className="font-bold text-rose-700 text-right">
+                        {formatRupiah(item.amount)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between">
+                  <span className="text-xs font-bold text-rose-900">Total Uang Nasabah:</span>
+                  <span className="text-sm font-black text-rose-700">
+                    {formatRupiah(customerFundModal.total)}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="py-8 text-center space-y-2">
+                <p className="text-xs text-slate-500">
+                  Belum ada catatan rincian nasabah untuk tanggal ini.
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Total nominal dihitung dari input manual atau belum diuraikan di submenu Uang Nasabah.
+                </p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+              <Link
+                href={`/admin/brilink/uang-nasabah?date=${customerFundModal.date}`}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold transition-colors"
+              >
+                <span>Kelola di Submenu Uang Nasabah</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </Link>
+              <button
+                type="button"
+                onClick={() => setCustomerFundModal((prev) => ({ ...prev, open: false }))}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+              >
+                Tutup
+              </button>
+            </div>
           </div>
         </div>
       )}

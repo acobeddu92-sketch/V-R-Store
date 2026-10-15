@@ -99,6 +99,19 @@ CREATE TABLE IF NOT EXISTS public.brilink_capital_entries (
 
 CREATE INDEX IF NOT EXISTS idx_capital_date ON public.brilink_capital_entries(entry_date);
 
+-- 6b. Tabel Uang Nasabah (Titipan / Kas Titipan Nasabah Harian)
+CREATE TABLE IF NOT EXISTS public.brilink_customer_funds (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entry_date DATE NOT NULL,
+    customer_name TEXT NOT NULL,
+    notes TEXT,
+    amount NUMERIC(15, 2) NOT NULL CHECK (amount > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_customer_funds_date ON public.brilink_customer_funds(entry_date);
+
 -- 7. Tabel Investor (Dividen)
 CREATE TABLE IF NOT EXISTS public.investors (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -148,6 +161,7 @@ ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.brilink_periods ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.brilink_daily_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.brilink_capital_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.brilink_customer_funds ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.investors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.investment_commissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
@@ -179,6 +193,9 @@ CREATE POLICY "Owner All Daily Transactions" ON public.brilink_daily_transaction
     FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 CREATE POLICY "Owner All Capital Entries" ON public.brilink_capital_entries
+    FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "Owner All Customer Funds" ON public.brilink_customer_funds
     FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 CREATE POLICY "Owner All Investors" ON public.investors

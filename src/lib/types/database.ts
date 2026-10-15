@@ -75,6 +75,16 @@ export interface BrilinkCapitalEntry {
   updated_at?: string;
 }
 
+export interface CustomerFundEntry {
+  id: string;
+  entry_date: string; // YYYY-MM-DD
+  customer_name: string;
+  notes?: string;
+  amount: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Investor {
   id: string;
   name: string;
