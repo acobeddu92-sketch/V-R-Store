@@ -40,13 +40,10 @@ export default function AdminSidebar({
       if (supabase) {
         await supabase.auth.signOut();
       }
-      if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('vr_store_auth');
-      }
-      router.push('/login');
+      router.replace('/login');
     } catch (e) {
       console.error('Logout error', e);
-      router.push('/login');
+      router.replace('/login');
     }
   };
 

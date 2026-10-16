@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Search, X, SlidersHorizontal, PackageOpen, ArrowUpDown } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Search, X, SlidersHorizontal, PackageOpen, ArrowUpDown, AlertCircle, RefreshCw } from 'lucide-react';
 import { dataService } from '@/lib/services/dataService';
 import { Product, ProductCategory, StoreSettings } from '@/lib/types/database';
 import { formatRupiah } from '@/lib/utils/currency';
@@ -11,31 +11,36 @@ export default function DaftarBarangPage() {
   const [categories, setCategories] = useState<ProductCategory[]>([]);
   const [settings, setSettings] = useState<StoreSettings | null>(null);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Filter & Search States
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortBy, setSortBy] = useState<'name-asc' | 'price-asc' | 'price-desc'>('name-asc');
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        const [loadedCats, loadedProds, loadedSettings] = await Promise.all([
-          dataService.getCategories(),
-          dataService.getProducts({ onlyActive: true }),
-          dataService.getStoreSettings(),
-        ]);
-        setCategories(loadedCats.filter((c) => c.is_active));
-        setProducts(loadedProds);
-        setSettings(loadedSettings);
-      } catch (err) {
-        console.error('Error loading catalog data', err);
-      } finally {
-        setLoading(false);
-      }
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      const [loadedCats, loadedProds, loadedSettings] = await Promise.all([
+        dataService.getCategories(),
+        dataService.getProducts({ onlyActive: true }),
+        dataService.getStoreSettings(),
+      ]);
+      setCategories(loadedCats.filter((c) => c.is_active));
+      setProducts(loadedProds);
+      setSettings(loadedSettings);
+    } catch (err: any) {
+      console.error('Error loading catalog data', err);
+      setErrorMessage(err.message || 'Gagal memuat data produk dari database. Silakan coba kembali.');
+    } finally {
+      setLoading(false);
     }
-    fetchData();
   }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   // Filter & Pengurutan Dinamis
   const filteredProducts = useMemo(() => {
@@ -176,7 +181,7 @@ export default function DaftarBarangPage() {
         </div>
       </div>
 
-      {/* Grid Product Cards */}
+      {/* Grid Product Cards / Status States */}
       {loading ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 sm:gap-6">
           {[...Array(10)].map((_, i) => (
@@ -186,6 +191,25 @@ export default function DaftarBarangPage() {
               <div className="h-4 bg-slate-200 rounded w-1/2" />
             </div>
           ))}
+        </div>
+      ) : errorMessage ? (
+        <div className="text-center py-16 bg-white rounded-3xl border border-rose-200 p-8 space-y-4 shadow-xs">
+          <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-600 mx-auto flex items-center justify-center">
+            <AlertCircle className="w-7 h-7" />
+          </div>
+          <div className="space-y-1.5 max-w-md mx-auto">
+            <h3 className="text-base font-bold text-slate-800">Gagal Memuat Katalog Produk</h3>
+            <p className="text-xs sm:text-sm text-rose-700 leading-relaxed font-medium">
+              {errorMessage}
+            </p>
+          </div>
+          <button
+            onClick={() => fetchData()}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition-colors shadow-md shadow-blue-600/20 cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Muat Ulang Katalog</span>
+          </button>
         </div>
       ) : filteredProducts.length > 0 ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 sm:gap-6">
@@ -233,15 +257,27 @@ export default function DaftarBarangPage() {
             </div>
           ))}
         </div>
+      ) : products.length === 0 ? (
+        <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300 space-y-4 p-8">
+          <div className="w-16 h-16 rounded-2xl bg-blue-50 text-blue-500 mx-auto flex items-center justify-center">
+            <PackageOpen className="w-8 h-8" />
+          </div>
+          <div className="space-y-1.5 max-w-md mx-auto">
+            <h3 className="text-base font-bold text-slate-800">Katalog Toko Sedang Kosong</h3>
+            <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">
+              Belum ada produk yang ditambahkan ke etalase toko. Produk baru akan segera ditampilkan setelah Owner menginput data barang melalui panel admin.
+            </p>
+          </div>
+        </div>
       ) : (
-        <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300 space-y-4">
-          <div className="w-16 h-16 rounded-2xl bg-blue-50 text-blue-400 mx-auto flex items-center justify-center">
+        <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300 space-y-4 p-8">
+          <div className="w-16 h-16 rounded-2xl bg-slate-50 text-slate-400 mx-auto flex items-center justify-center">
             <PackageOpen className="w-8 h-8" />
           </div>
           <div className="space-y-1 max-w-sm mx-auto">
             <h3 className="text-base font-bold text-slate-800">Barang Tidak Ditemukan</h3>
-            <p className="text-xs sm:text-sm text-slate-500">
-              Tidak ada produk yang cocok dengan kata kunci &ldquo;{searchQuery}&rdquo; pada filter kategori saat ini.
+            <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">
+              Tidak ada produk yang cocok dengan kata kunci &ldquo;{searchQuery}&rdquo; pada filter kategori yang dipilih saat ini.
             </p>
           </div>
           <button
@@ -249,7 +285,7 @@ export default function DaftarBarangPage() {
               setSearchQuery('');
               setSelectedCategory('ALL');
             }}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-bold transition-all"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-bold transition-all cursor-pointer"
           >
             Tampilkan Semua Barang (ALL)
           </button>

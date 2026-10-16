@@ -334,7 +334,11 @@ class DataService {
           .from('product_categories')
           .select('*')
           .order('sort_order', { ascending: true });
-        if (!error && data) return data as ProductCategory[];
+        if (error) {
+          console.error('Supabase getCategories error:', error.message);
+          throw new Error(`Gagal memuat kategori: ${error.message}`);
+        }
+        if (data) return data as ProductCategory[];
       }
     }
     return getLocalItem<ProductCategory[]>('categories', DEFAULT_CATEGORIES);
@@ -355,7 +359,11 @@ class DataService {
           .insert([cat])
           .select()
           .single();
-        if (!error && data) return data as ProductCategory;
+        if (error) {
+          console.error('Supabase createCategory error:', error);
+          throw new Error(`Gagal menyimpan kategori ke database: ${error.message}`);
+        }
+        if (data) return data as ProductCategory;
       }
     }
 
@@ -375,7 +383,11 @@ class DataService {
           .eq('id', id)
           .select()
           .single();
-        if (!error && data) return data as ProductCategory;
+        if (error) {
+          console.error('Supabase updateCategory error:', error);
+          throw new Error(`Gagal memperbarui kategori di database: ${error.message}`);
+        }
+        if (data) return data as ProductCategory;
       }
     }
 
@@ -398,7 +410,11 @@ class DataService {
       const supabase = createClient();
       if (supabase) {
         const { error } = await supabase.from('product_categories').delete().eq('id', id);
-        if (!error) return true;
+        if (error) {
+          console.error('Supabase deleteCategory error:', error);
+          throw new Error(`Gagal menghapus kategori di database: ${error.message}`);
+        }
+        return true;
       }
     }
 
@@ -417,15 +433,16 @@ class DataService {
     if (this.isSupabaseConfigured()) {
       const supabase = createClient();
       if (supabase) {
-        let query = supabase.from('products').select('*, product_categories(name)');
+        let query = supabase.from('products').select('*');
         if (options?.onlyActive) query = query.eq('is_active', true).eq('is_deleted', false);
-        if (options?.categoryId) query = query.eq('category_id', options.categoryId);
+        if (options?.categoryId && options.categoryId !== 'ALL') query = query.eq('category_id', options.categoryId);
         const { data, error } = await query;
-        if (!error && data) {
-          list = data.map((d: any) => ({
-            ...d,
-            category_name: d.product_categories?.name,
-          }));
+        if (error) {
+          console.error('Supabase getProducts error:', error.message, error);
+          throw new Error(`Gagal memuat produk dari database: ${error.message}`);
+        }
+        if (data) {
+          list = data as Product[];
         }
       }
     } else {
@@ -472,7 +489,11 @@ class DataService {
           .insert([prod])
           .select()
           .single();
-        if (!error && data) return data as Product;
+        if (error) {
+          console.error('Supabase createProduct error:', error);
+          throw new Error(`Gagal menyimpan produk ke database: ${error.message}`);
+        }
+        if (data) return data as Product;
       }
     }
 
@@ -492,7 +513,11 @@ class DataService {
           .eq('id', id)
           .select()
           .single();
-        if (!error && data) return data as Product;
+        if (error) {
+          console.error('Supabase updateProduct error:', error);
+          throw new Error(`Gagal memperbarui produk di database: ${error.message}`);
+        }
+        if (data) return data as Product;
       }
     }
 
@@ -505,6 +530,20 @@ class DataService {
   }
 
   async deleteProduct(id: string): Promise<boolean> {
+    if (this.isSupabaseConfigured()) {
+      const supabase = createClient();
+      if (supabase) {
+        const { error } = await supabase
+          .from('products')
+          .update({ is_deleted: true, is_active: false, updated_at: new Date().toISOString() })
+          .eq('id', id);
+        if (error) {
+          console.error('Supabase deleteProduct error:', error);
+          throw new Error(`Gagal menghapus produk di database: ${error.message}`);
+        }
+        return true;
+      }
+    }
     return (await this.updateProduct(id, { is_deleted: true, is_active: false })).is_deleted || false;
   }
 

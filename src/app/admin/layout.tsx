@@ -16,35 +16,40 @@ export default function AdminLayout({
   const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
+
     async function checkAuth() {
       try {
         const supabase = createClient();
-        if (supabase) {
-          const { data } = await supabase.auth.getSession();
-          if (!data.session) {
-            // Cek fallback session storage jika local test
-            const localAuth = typeof window !== 'undefined' ? sessionStorage.getItem('vr_store_auth') : null;
-            if (!localAuth) {
-              router.push('/login');
-              return;
-            }
-          }
-        } else {
-          // Fallback lokal: cek apakah user sudah login melalui portal login
-          const localAuth = typeof window !== 'undefined' ? sessionStorage.getItem('vr_store_auth') : null;
-          if (!localAuth) {
-            router.push('/login');
-            return;
-          }
+        if (!supabase) {
+          console.warn('Supabase client belum terkonfigurasi. Mengalihkan ke login.');
+          router.replace('/login');
+          return;
+        }
+
+        // Validasi keaslian sesi langsung ke server Supabase Auth
+        const { data: { user }, error } = await supabase.auth.getUser();
+
+        if (error || !user) {
+          console.warn('Pengguna belum terautentikasi atau sesi telah berakhir.');
+          router.replace('/login');
+          return;
+        }
+
+        if (isMounted) {
+          setAuthChecked(true);
         }
       } catch (e) {
         console.error('Auth verification error', e);
-      } finally {
-        setAuthChecked(true);
+        router.replace('/login');
       }
     }
 
     checkAuth();
+
+    return () => {
+      isMounted = false;
+    };
   }, [router]);
 
   if (!authChecked) {

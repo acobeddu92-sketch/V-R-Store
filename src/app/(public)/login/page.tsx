@@ -1,72 +1,78 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ShoppingBag, Lock, User, Eye, EyeOff, AlertCircle, ArrowRight, ShieldCheck, Key } from 'lucide-react';
+import { ShoppingBag, Lock, Mail, Eye, EyeOff, AlertCircle, ArrowRight, ShieldCheck } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
+  // Jika sudah memiliki sesi Supabase aktif, langsung arahkan ke Dashboard
+  useEffect(() => {
+    async function checkSession() {
+      try {
+        const supabase = createClient();
+        if (supabase) {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            router.replace('/admin');
+          }
+        }
+      } catch (err) {
+        console.error('Session check error', err);
+      }
+    }
+    checkSession();
+  }, [router]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
-    const cleanUser = username.trim().toLowerCase();
+    const cleanEmail = email.trim().toLowerCase();
     const cleanPass = password.trim();
 
-    if (!cleanUser || !cleanPass) {
-      setErrorMessage('Harap masukkan Username/Email dan Password.');
+    if (!cleanEmail || !cleanPass) {
+      setErrorMessage('Harap masukkan Email dan Kata Sandi Owner.');
       return;
     }
 
     setLoading(true);
 
     try {
-      // 1. Cek kredensial demo / lokal yang diminta secara instan
-      if (
-        (cleanUser === 'owner' && cleanPass === '12345') ||
-        (cleanUser === 'admin' && cleanPass === '12345') ||
-        (cleanUser === 'owner@vrstore.com' && (cleanPass === '12345' || cleanPass === 'vrstore123'))
-      ) {
-        if (typeof window !== 'undefined') {
-          sessionStorage.setItem('vr_store_auth', JSON.stringify({ user: cleanUser, role: 'owner' }));
-        }
-        router.push('/admin');
+      const supabase = createClient();
+      if (!supabase) {
+        setErrorMessage('Sistem database belum terhubung. Pastikan konfigurasi Supabase telah diatur di Vercel.');
+        setLoading(false);
         return;
       }
 
-      // 2. Cek apakah ada koneksi Supabase Auth aktif
-      const supabase = createClient();
-      if (supabase && cleanUser.includes('@')) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: cleanUser,
-          password: cleanPass,
-        });
+      // Autentikasi server-side murni melalui Supabase Auth
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: cleanPass,
+      });
 
-        if (error) {
-          setErrorMessage('Email atau password tidak sesuai.');
-          setLoading(false);
-          return;
-        }
-
-        if (data.session) {
-          if (typeof window !== 'undefined') {
-            sessionStorage.setItem('vr_store_auth', JSON.stringify({ email: data.session.user.email, role: 'owner' }));
-          }
-          router.push('/admin');
-          return;
-        }
+      if (error) {
+        setErrorMessage('Email atau kata sandi tidak sesuai. Silakan periksa kembali akun Owner Anda.');
+        setLoading(false);
+        return;
       }
 
-      setErrorMessage('Kredensial salah. Gunakan Username: owner dan Password: 12345 untuk demo.');
+      if (data.user) {
+        router.replace('/admin');
+        return;
+      }
+
+      setErrorMessage('Autentikasi gagal. Silakan coba beberapa saat lagi.');
     } catch (err: any) {
-      setErrorMessage(err.message || 'Terjadi kesalahan sistem.');
+      setErrorMessage(err.message || 'Terjadi kesalahan sistem saat proses masuk.');
     } finally {
       setLoading(false);
     }
@@ -85,7 +91,7 @@ export default function LoginPage() {
               Portal Masuk Owner
             </h1>
             <p className="text-xs sm:text-sm text-slate-500 mt-1">
-              Sistem Manajemen Inventaris Toko & Pembukuan BRILink
+              Sistem Manajemen Inventaris Toko & Pembukuan BRILink V_R Store
             </p>
           </div>
         </div>
@@ -93,7 +99,7 @@ export default function LoginPage() {
         {/* Security Notice */}
         <div className="flex items-center gap-2 text-xs text-blue-900 bg-blue-50 border border-blue-200 p-3 rounded-xl font-medium">
           <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-          <span>Halaman ini khusus untuk Pengelola / Owner V_R Store.</span>
+          <span>Halaman ini khusus terautentikasi untuk Pengelola / Owner V_R Store.</span>
         </div>
 
         {/* Error Alert */}
@@ -106,18 +112,19 @@ export default function LoginPage() {
 
         {/* Login Form */}
         <form onSubmit={handleLogin} className="space-y-4">
-          {/* Username / Email */}
+          {/* Email */}
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Username atau Email Owner
+              Email Resmi Owner
             </label>
             <div className="relative">
-              <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
-                type="text"
-                placeholder="Masukkan username atau email..."
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                type="email"
+                placeholder="nama@vrstore.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
                 required
                 className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 text-sm outline-none transition-all placeholder:text-slate-400 font-medium"
               />
@@ -127,15 +134,16 @@ export default function LoginPage() {
           {/* Password */}
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Password
+              Kata Sandi
             </label>
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type={showPassword ? 'text' : 'password'}
-                placeholder="Masukkan kata sandi..."
+                placeholder="Masukkan kata sandi akun..."
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
                 required
                 className="w-full pl-10 pr-11 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 text-sm outline-none transition-all placeholder:text-slate-400 font-medium"
               />
@@ -143,7 +151,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                title={showPassword ? 'Sembunyikan password' : 'Tampilkan password'}
+                title={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -159,7 +167,7 @@ export default function LoginPage() {
             {loading ? (
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                <span>Memverifikasi...</span>
+                <span>Memverifikasi Akses...</span>
               </div>
             ) : (
               <>
@@ -169,21 +177,6 @@ export default function LoginPage() {
             )}
           </button>
         </form>
-
-        {/* Kotak Informasi Kredensial Demo yang Disediakan */}
-        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 text-xs space-y-1.5">
-          <div className="flex items-center gap-2 font-bold text-amber-900">
-            <Key className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>Kredensial Akses Uji Coba (Demo):</span>
-          </div>
-          <div className="pl-6 space-y-0.5 font-mono text-[11px] text-amber-900">
-            <div>Username: <strong className="text-slate-900 bg-white px-1.5 py-0.5 rounded border border-amber-300">owner</strong></div>
-            <div>Password: <strong className="text-slate-900 bg-white px-1.5 py-0.5 rounded border border-amber-300">12345</strong></div>
-          </div>
-          <p className="text-[10px] text-amber-700 pt-1">
-            *Dapat langsung digunakan untuk menguji seluruh fitur manajemen toko.
-          </p>
-        </div>
       </div>
     </div>
   );
