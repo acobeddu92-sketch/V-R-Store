@@ -47,6 +47,12 @@ export interface BrilinkPeriod {
   updated_at?: string;
 }
 
+export interface DebtItem {
+  id: string;
+  name: string;
+  amount: number;
+}
+
 export interface BrilinkDailyTransaction {
   id: string;
   period_id: string;
@@ -61,6 +67,7 @@ export interface BrilinkDailyTransaction {
   daily_capital: number;
   daily_income: number; // calculated: (Tunai + BRIMO + Payfazz + Brilian + Utang) - Modal - Uang Nasabah
   notes?: string;
+  debt_items?: DebtItem[];
   created_at?: string;
   updated_at?: string;
 }

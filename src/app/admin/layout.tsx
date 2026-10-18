@@ -27,12 +27,36 @@ export default function AdminLayout({
           return;
         }
 
-        // Validasi keaslian sesi langsung ke server Supabase Auth
-        const { data: { user }, error } = await supabase.auth.getUser();
+        // 1. Validasi keaslian sesi langsung ke server Supabase Auth
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
 
-        if (error || !user) {
+        if (userError || !user) {
           console.warn('Pengguna belum terautentikasi atau sesi telah berakhir.');
           router.replace('/login');
+          return;
+        }
+
+        // 2. Validasi kepemilikan sah di tabel store_owners
+        const { data: ownerRecord, error: ownerError } = await supabase
+          .from('store_owners')
+          .select('role, is_active')
+          .eq('user_id', user.id)
+          .eq('role', 'owner')
+          .eq('is_active', true)
+          .maybeSingle();
+
+        if (ownerError) {
+          // Keamanan ketat: jangan izinkan akses admin jika tabel store_owners belum siap
+          console.error('Pemeriksaan store_owners gagal (tabel belum tersedia atau error database):', ownerError);
+          await supabase.auth.signOut();
+          router.replace('/login?error=owner_check_failed');
+          return;
+        }
+
+        if (!ownerRecord) {
+          console.warn('Akses ditolak: Pengguna bukan Owner sah atau akun dinonaktifkan.');
+          await supabase.auth.signOut();
+          router.replace('/login?error=unauthorized');
           return;
         }
 

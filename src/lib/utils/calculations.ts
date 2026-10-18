@@ -1,5 +1,5 @@
 import { getAnniversaryDate } from './date';
-import { Investor, InvestmentCommission } from '../types/database';
+import { Investor, InvestmentCommission, DebtItem } from '../types/database';
 
 /**
  * Formula Pendapatan Harian BRILink (Excel Spreadsheet Style)
@@ -126,4 +126,81 @@ export function generateInvestorCommissions(
     monthlyCommission: baseRateCommission,
     totalEarned,
   };
+}
+
+/**
+  * Parsing catatan utang dari kolom notes (JSON berstruktur) atau nilai numerik warisan (legacy).
+  * Menjaga kompatibilitas 100% dengan data lama di Supabase tanpa perlu mengubah tipe data kolom debt_notes.
+  */
+export function parseDebtNotes(
+  notesStr?: string | null,
+  fallbackDebtAmount: number = 0
+): { items: DebtItem[]; generalNote: string } {
+  if (!notesStr || !notesStr.trim()) {
+    if (fallbackDebtAmount > 0) {
+      return {
+        items: [{ id: 'legacy-1', name: 'Catatan Utang', amount: fallbackDebtAmount }],
+        generalNote: '',
+      };
+    }
+    return { items: [], generalNote: '' };
+  }
+
+  const trimmed = notesStr.trim();
+
+  // Coba parse format JSON
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object') {
+        const rawItems = Array.isArray(parsed.debt_items) ? parsed.debt_items : [];
+        const items: DebtItem[] = rawItems.map((item: any, idx: number) => ({
+          id: String(item.id || `debt-${idx + 1}`),
+          name: String(item.name || `Peminjam ${idx + 1}`),
+          amount: Number(item.amount) || 0,
+        }));
+
+        const generalNote =
+          typeof parsed.note === 'string'
+            ? parsed.note
+            : typeof parsed.generalNote === 'string'
+            ? parsed.generalNote
+            : '';
+
+        // Jika items kosong tapi ada fallback utang
+        if (items.length === 0 && fallbackDebtAmount > 0) {
+          items.push({ id: 'legacy-1', name: 'Catatan Utang', amount: fallbackDebtAmount });
+        }
+
+        return { items, generalNote };
+      }
+    } catch {
+      // Jika bukan JSON valid, perlakukan sebagai catatan umum biasa
+    }
+  }
+
+  // Fallback: format teks biasa lama
+  return {
+    items: fallbackDebtAmount > 0
+      ? [{ id: 'legacy-1', name: 'Catatan Utang', amount: fallbackDebtAmount }]
+      : [],
+    generalNote: trimmed,
+  };
+}
+
+/**
+ * Memformat daftar item utang dan catatan umum ke dalam string notes untuk disimpan ke Supabase.
+ */
+export function formatDebtNotes(items: DebtItem[], generalNote: string = ''): string {
+  const cleanNote = generalNote.trim();
+  const validItems = (items || []).filter((item) => (item.name && item.name.trim()) || item.amount > 0);
+
+  if (validItems.length === 0) {
+    return cleanNote;
+  }
+
+  return JSON.stringify({
+    debt_items: validItems,
+    note: cleanNote,
+  });
 }

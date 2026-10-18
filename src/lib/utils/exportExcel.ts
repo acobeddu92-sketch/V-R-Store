@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx';
 import { BrilinkDailyTransaction, MonthlyRecapRow, Investor, BrilinkCapitalEntry, Product, CustomerFundEntry } from '../types/database';
 import { formatRupiah } from './currency';
 import { MONTH_NAMES_ID, formatDateID } from './date';
+import { parseDebtNotes } from './calculations';
 
 /**
  * Ekspor Laporan Transaksi Bulanan ke Excel
@@ -37,7 +38,7 @@ export function exportMonthlyTransactionsToExcel(
     'Catatan Utang (Rp)': t.debt_notes,
     'Modal Hari Ini (Rp)': t.daily_capital,
     'Pendapatan Hari Ini (Rp)': t.daily_income,
-    'Catatan': t.notes || '',
+    'Catatan': parseDebtNotes(t.notes).generalNote || (t.notes?.startsWith('{') ? '' : (t.notes || '')),
   }));
 
   // Baris Total

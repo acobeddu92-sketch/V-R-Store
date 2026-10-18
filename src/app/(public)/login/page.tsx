@@ -13,7 +13,20 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Jika sudah memiliki sesi Supabase aktif, langsung arahkan ke Dashboard
+  // Tangani parameter error dari redirect layout admin
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const errorParam = params.get('error');
+      if (errorParam === 'unauthorized') {
+        setErrorMessage('Akses Ditolak: Akun Anda belum terdaftar sebagai Pemilik sah V_R Store.');
+      } else if (errorParam === 'owner_check_failed') {
+        setErrorMessage('Sistem Keamanan: Tabel hak akses Pemilik (store_owners) belum diinisialisasi di database.');
+      }
+    }
+  }, []);
+
+  // Jika sudah memiliki sesi Supabase aktif, pastikan merupakan owner aktif sebelum ke Dashboard
   useEffect(() => {
     async function checkSession() {
       try {
@@ -21,6 +34,19 @@ export default function LoginPage() {
         if (supabase) {
           const { data: { user } } = await supabase.auth.getUser();
           if (user) {
+            const { data: ownerRecord, error: ownerError } = await supabase
+              .from('store_owners')
+              .select('role, is_active')
+              .eq('user_id', user.id)
+              .eq('role', 'owner')
+              .eq('is_active', true)
+              .maybeSingle();
+
+            if (ownerError || !ownerRecord) {
+              await supabase.auth.signOut();
+              return;
+            }
+
             router.replace('/admin');
           }
         }
@@ -53,7 +79,7 @@ export default function LoginPage() {
         return;
       }
 
-      // Autentikasi server-side murni melalui Supabase Auth
+      // 1. Autentikasi server-side murni melalui Supabase Auth
       const { data, error } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password: cleanPass,
@@ -66,6 +92,31 @@ export default function LoginPage() {
       }
 
       if (data.user) {
+        // 2. Verifikasi hak akses Owner aktif di tabel store_owners
+        const { data: ownerRecord, error: ownerError } = await supabase
+          .from('store_owners')
+          .select('role, is_active')
+          .eq('user_id', data.user.id)
+          .eq('role', 'owner')
+          .eq('is_active', true)
+          .maybeSingle();
+
+        if (ownerError) {
+          console.error('Pemeriksaan store_owners gagal saat login:', ownerError);
+          await supabase.auth.signOut();
+          setErrorMessage('Sistem Keamanan: Gagal memvalidasi hak akses Pemilik (tabel store_owners belum siap di database).');
+          setLoading(false);
+          return;
+        }
+
+        if (!ownerRecord) {
+          console.warn('Akses ditolak saat login: Pengguna bukan owner aktif.');
+          await supabase.auth.signOut();
+          setErrorMessage('Akses Ditolak: Akun Anda belum terdaftar sebagai Pemilik sah V_R Store.');
+          setLoading(false);
+          return;
+        }
+
         router.replace('/admin');
         return;
       }

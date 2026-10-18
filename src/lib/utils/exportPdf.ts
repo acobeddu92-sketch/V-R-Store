@@ -3,6 +3,7 @@ import autoTable from 'jspdf-autotable';
 import { BrilinkDailyTransaction, MonthlyRecapRow, Investor, BrilinkCapitalEntry, Product, CustomerFundEntry } from '../types/database';
 import { formatRupiah } from './currency';
 import { MONTH_NAMES_ID, formatDateID } from './date';
+import { parseDebtNotes } from './calculations';
 
 /**
  * Ekspor Laporan Transaksi Bulanan ke PDF (A4 Landscape)
@@ -54,7 +55,7 @@ export function exportMonthlyTransactionsToPdf(
     formatRupiah(t.debt_notes),
     formatRupiah(t.daily_capital),
     formatRupiah(t.daily_income),
-    t.notes || '-',
+    parseDebtNotes(t.notes).generalNote || (t.notes?.startsWith('{') ? '-' : (t.notes || '-')),
   ]);
 
   // Baris Total
