@@ -53,6 +53,13 @@ export interface DebtItem {
   amount: number;
 }
 
+export interface BalanceEntryItem {
+  id: string;
+  amount: number;
+  notes?: string;
+  timestamp?: string;
+}
+
 export interface BrilinkDailyTransaction {
   id: string;
   period_id: string;
@@ -62,12 +69,15 @@ export interface BrilinkDailyTransaction {
   brimo_balance: number;
   payfazz_balance: number;
   brilian_balance: number;
+  bpd_balance?: number; // Saldo BPD (disinkronkan dengan brilian_balance untuk kompatibilitas database tanpa migrasi SQL)
   customer_funds: number;
   debt_notes: number;
   daily_capital: number;
-  daily_income: number; // calculated: (Tunai + BRIMO + Payfazz + Brilian + Utang) - Modal - Uang Nasabah
+  daily_income: number; // calculated: (Tunai + BRIMO + Payfazz + Brilian/BPD + Utang) - Modal - Uang Nasabah
   notes?: string;
   debt_items?: DebtItem[];
+  brimo_items?: BalanceEntryItem[];
+  bpd_items?: BalanceEntryItem[];
   created_at?: string;
   updated_at?: string;
 }
@@ -136,6 +146,7 @@ export interface MonthlyRecapRow {
   brimo_balance: number;
   payfazz_balance: number;
   brilian_balance: number;
+  bpd_balance?: number;
   customer_funds: number;
   debt_notes: number;
   daily_capital: number;

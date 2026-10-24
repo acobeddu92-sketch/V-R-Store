@@ -335,7 +335,7 @@ export default function ModalBrilinkPage() {
             {formatRupiah(totalGrandCapital)}
           </div>
           <p className="text-xs text-blue-200 max-w-xl leading-relaxed">
-            Akumulasi modal operasional BRILink. Nilai modal pada setiap tanggal otomatis ditarik dan diagregasikan ke kolom Modal Hari Ini pada Laporan Transaksi Harian.
+            Akumulasi modal operasional BRILink. Nominal modal aktif otomatis tersinkronisasi ke kolom Modal pada Laporan Transaksi (Laporan Harian).
           </p>
         </div>
 

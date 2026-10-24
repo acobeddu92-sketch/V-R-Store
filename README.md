@@ -115,7 +115,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ### A. Transaksi Harian BRILink (Excel Spreadsheet Style)
 - Setiap baris mewakili **1 tanggal transaksi**.
 - **Rumus Pendapatan Hari Ini**:
-  $$\text{Pendapatan Hari Ini} = \text{Tunai} + \text{BRIMO} + \text{Payfazz} + \text{Brilian} + \text{Catatan Utang} - \text{Modal Hari Ini} - \text{Uang Nasabah}$$
+  $$\text{Pendapatan Hari Ini} = \text{Tunai} + \text{BRIMO} + \text{Payfazz} + \text{Saldo BPD} + \text{Catatan Utang} - \text{Modal} - \text{Uang Nasabah}$$
 - Murni dihitung otomatis per baris secara mandiri tanpa mengambil tanggal lain.
 - **Pendapatan Bulanan**: Penjumlahan seluruh nilai `Pendapatan Hari Ini` dalam periode bulan terpilih.
 - Baris bawah tabel menampilkan jumlah total masing-masing kolom operasional.

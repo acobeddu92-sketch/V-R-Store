@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Package,
   Plus,
@@ -15,11 +15,23 @@ import {
   Download,
   Boxes,
   SlidersHorizontal,
+  Camera,
+  CameraOff,
+  RefreshCw,
+  Check,
+  Image as ImageIcon,
+  SwitchCamera,
+  X,
 } from 'lucide-react';
 import { dataService } from '@/lib/services/dataService';
 import { Product, ProductCategory } from '@/lib/types/database';
 import { formatRupiah } from '@/lib/utils/currency';
 import { exportProductsToExcel } from '@/lib/utils/exportExcel';
+import {
+  compressImageSource,
+  captureVideoFrame,
+  validateImageFile,
+} from '@/lib/utils/image';
 
 export default function AturBarangPage() {
   const [activeTab, setActiveTab] = useState<'products' | 'categories'>('products');
@@ -41,6 +53,21 @@ export default function AturBarangPage() {
   const [prodImageUrl, setProdImageUrl] = useState('');
   const [prodActive, setProdActive] = useState(true);
   const [prodError, setProdError] = useState('');
+
+  // Camera & Image Upload States
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [cameraLoading, setCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
+  const [isCompressingImage, setIsCompressingImage] = useState(false);
+
+  // Refs untuk Media Stream dan File Input
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
 
   // Modal State Kategori
   const [catModalOpen, setCatModalOpen] = useState(false);
@@ -83,8 +110,145 @@ export default function AturBarangPage() {
     setTimeout(() => setSuccessMessage(''), 4000);
   };
 
+  // ================= CAMERA & IMAGE HANDLERS =================
+  const stopCameraStream = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => {
+        track.stop();
+      });
+      cameraStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  const startCamera = async (mode: 'environment' | 'user' = facingMode) => {
+    setCameraError('');
+    setCameraLoading(true);
+    setCapturedPhoto(null);
+    stopCameraStream();
+
+    if (typeof window === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraError(
+        'Kamera browser tidak didukung atau memerlukan koneksi aman (HTTPS). Silakan gunakan opsi unggah file atau Kamera HP bawaan.'
+      );
+      setCameraLoading(false);
+      setIsCameraActive(true);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: mode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+
+      cameraStreamRef.current = stream;
+      setIsCameraActive(true);
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter((d) => d.kind === 'videoinput');
+        setHasMultipleCameras(videoDevices.length > 1);
+      } catch {
+        setHasMultipleCameras(false);
+      }
+    } catch (err: any) {
+      console.error('Camera access error:', err);
+      setIsCameraActive(true);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setCameraError(
+          'Izin akses kamera ditolak. Berikan izin kamera pada ikon gembok browser atau gunakan opsi "Pilih Galeri / Kamera HP".'
+        );
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        setCameraError('Kamera tidak terdeteksi pada perangkat Anda. Silakan pilih gambar dari galeri perangkat.');
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        setCameraError('Kamera sedang digunakan oleh aplikasi lain. Tutup aplikasi tersebut dan coba lagi.');
+      } else {
+        setCameraError(`Gagal mengakses kamera: ${err.message || 'Terjadi gangguan sistem'}`);
+      }
+    } finally {
+      setCameraLoading(false);
+    }
+  };
+
+  const toggleFacingMode = () => {
+    const nextMode = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextMode);
+    startCamera(nextMode);
+  };
+
+  const handleCapturePhoto = () => {
+    if (!videoRef.current) return;
+    try {
+      const snapshot = captureVideoFrame(videoRef.current, {
+        maxWidth: 800,
+        maxHeight: 800,
+        quality: 0.8,
+      });
+      setCapturedPhoto(snapshot);
+    } catch (err: any) {
+      setCameraError(`Gagal mengambil foto: ${err.message}`);
+    }
+  };
+
+  const handleRetakePhoto = () => {
+    setCapturedPhoto(null);
+    if (videoRef.current && cameraStreamRef.current) {
+      videoRef.current.play().catch(() => {});
+    } else {
+      startCamera(facingMode);
+    }
+  };
+
+  const handleApplyCapturedPhoto = () => {
+    if (capturedPhoto) {
+      setProdImageUrl(capturedPhoto);
+      setProdError('');
+    }
+    stopCameraStream();
+    setIsCameraActive(false);
+    setCapturedPhoto(null);
+  };
+
+  const handleCloseCamera = () => {
+    stopCameraStream();
+    setIsCameraActive(false);
+    setCapturedPhoto(null);
+    setCameraError('');
+  };
+
+  // Pastikan stream terhubung saat elemen video kamera selesai render
+  useEffect(() => {
+    if (isCameraActive && videoRef.current && cameraStreamRef.current && !capturedPhoto) {
+      videoRef.current.srcObject = cameraStreamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [isCameraActive, capturedPhoto]);
+
+  // Hentikan media stream saat unmount atau berpindah halaman
+  useEffect(() => {
+    return () => {
+      stopCameraStream();
+    };
+  }, []);
+
   // ================= PRODUK HANDLERS =================
   const handleOpenProductModal = (prod?: Product) => {
+    stopCameraStream();
+    setIsCameraActive(false);
+    setCapturedPhoto(null);
+    setCameraError('');
     setProdError('');
     if (prod) {
       setEditingProduct(prod);
@@ -104,6 +268,14 @@ export default function AturBarangPage() {
       setProdActive(true);
     }
     setProductModalOpen(true);
+  };
+
+  const handleCloseProductModal = () => {
+    stopCameraStream();
+    setIsCameraActive(false);
+    setCapturedPhoto(null);
+    setCameraError('');
+    setProductModalOpen(false);
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
@@ -154,32 +326,39 @@ export default function AturBarangPage() {
         showNotification(`Barang baru "${prodName}" berhasil ditambahkan.`);
       }
 
-      setProductModalOpen(false);
+      handleCloseProductModal();
       loadData();
     } catch (err: any) {
       setProdError(err.message || 'Gagal menyimpan barang.');
     }
   };
 
-  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
-      setProdError('File harus berupa gambar (JPG, PNG, WEBP).');
+    const validation = validateImageFile(file, 10 * 1024 * 1024);
+    if (!validation.valid) {
+      setProdError(validation.error || 'File tidak valid.');
       return;
     }
 
-    if (file.size > 2 * 1024 * 1024) {
-      setProdError('Ukuran gambar maksimal adalah 2MB.');
-      return;
+    try {
+      setIsCompressingImage(true);
+      setProdError('');
+      const compressed = await compressImageSource(file, {
+        maxWidth: 800,
+        maxHeight: 800,
+        quality: 0.8,
+      });
+      setProdImageUrl(compressed);
+    } catch (err: any) {
+      console.error('Failed to compress image:', err);
+      setProdError('Gagal memproses gambar. Silakan coba file lain.');
+    } finally {
+      setIsCompressingImage(false);
+      e.target.value = '';
     }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setProdImageUrl(event.target?.result as string);
-    };
-    reader.readAsDataURL(file);
   };
 
   // ================= KATEGORI HANDLERS =================
@@ -528,13 +707,23 @@ export default function AturBarangPage() {
       {productModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 border border-slate-200 shadow-2xl space-y-5 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
-            <div className="border-b border-slate-100 pb-3">
-              <h3 className="text-lg font-black text-slate-900">
-                {editingProduct ? 'Edit Data Barang' : 'Tambah Barang Baru'}
-              </h3>
-              <p className="text-xs text-slate-500">
-                Isi form lengkap data barang untuk ditampilkan di katalog toko.
-              </p>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-lg font-black text-slate-900">
+                  {editingProduct ? 'Edit Data Barang' : 'Tambah Barang Baru'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Isi form lengkap data barang untuk ditampilkan di katalog toko.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseProductModal}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
+                title="Tutup Form"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
             {prodError && (
@@ -603,34 +792,249 @@ export default function AturBarangPage() {
                 </div>
               </div>
 
-              {/* Gambar Barang (Upload lokal atau URL) */}
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-700">Gambar Barang (File Lokal atau URL)</label>
-                <div className="flex items-center gap-3">
-                  <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
-                    {prodImageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={prodImageUrl} alt="Preview" className="w-full h-full object-cover" />
-                    ) : (
-                      <Package className="w-6 h-6 text-slate-300" />
-                    )}
+              {/* Gambar Barang (Kamera Langsung, Galeri, atau URL) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-700">Foto / Gambar Barang</label>
+                  {prodImageUrl && !isCameraActive && (
+                    <button
+                      type="button"
+                      onClick={() => setProdImageUrl('')}
+                      className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 transition-colors cursor-pointer"
+                    >
+                      Hapus Foto
+                    </button>
+                  )}
+                </div>
+
+                {/* TAMPILAN KAMERA AKTIF */}
+                {isCameraActive ? (
+                  <div className="rounded-2xl border-2 border-blue-500 bg-slate-950 p-3 text-white space-y-3 animate-in fade-in zoom-in-95">
+                    {/* Viewport Kamera Video / Captured Snapshot */}
+                    <div className="relative aspect-video sm:aspect-4/3 w-full rounded-xl overflow-hidden bg-black flex items-center justify-center border border-slate-800">
+                      {cameraLoading && (
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 gap-2">
+                          <RefreshCw className="w-6 h-6 animate-spin text-blue-400" />
+                          <span className="text-xs font-semibold text-slate-200">Menghubungkan ke kamera...</span>
+                        </div>
+                      )}
+
+                      {cameraError ? (
+                        <div className="p-4 text-center space-y-3 z-10 max-w-xs">
+                          <div className="w-10 h-10 rounded-full bg-rose-500/20 text-rose-400 mx-auto flex items-center justify-center">
+                            <CameraOff className="w-5 h-5" />
+                          </div>
+                          <p className="text-xs text-rose-300 font-medium leading-relaxed">{cameraError}</p>
+                          <div className="flex flex-col gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => nativeCameraInputRef.current?.click()}
+                              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-bold text-white transition-colors cursor-pointer"
+                            >
+                              Buka Kamera Bawaan HP
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
+                            >
+                              Pilih dari Galeri / File
+                            </button>
+                          </div>
+                        </div>
+                      ) : capturedPhoto ? (
+                        // Pratinjau Foto Jepretan
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={capturedPhoto} alt="Hasil Foto" className="w-full h-full object-contain" />
+                      ) : (
+                        // Live Stream Video
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-cover"
+                        />
+                      )}
+
+                      {/* Overlay Badges */}
+                      {!cameraError && (
+                        <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md text-[10px] font-bold text-white border border-white/10">
+                          {capturedPhoto ? (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                              <span>Foto Siap Dipakai</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                              <span>Live Kamera ({facingMode === 'environment' ? 'Belakang' : 'Depan'})</span>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Tombol Balik Kamera (Depan / Belakang) */}
+                      {!cameraError && !capturedPhoto && (
+                        <button
+                          type="button"
+                          onClick={toggleFacingMode}
+                          title="Balik Kamera (Depan / Belakang)"
+                          className="absolute top-2.5 right-2.5 p-2 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white border border-white/20 transition-all cursor-pointer"
+                        >
+                          <SwitchCamera className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Tombol Kontrol Kamera */}
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      {capturedPhoto ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleRetakePhoto}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            <span>Ulangi Foto</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleApplyCapturedPhoto}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-md shadow-emerald-600/30 transition-colors cursor-pointer"
+                          >
+                            <Check className="w-4 h-4" />
+                            <span>Gunakan Foto</span>
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleCloseCamera}
+                            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 transition-colors cursor-pointer"
+                          >
+                            Tutup Kamera
+                          </button>
+                          {!cameraError && (
+                            <button
+                              type="button"
+                              onClick={handleCapturePhoto}
+                              disabled={cameraLoading}
+                              className="flex-1 inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-xs font-black text-white shadow-lg shadow-blue-600/40 transition-all cursor-pointer active:scale-95"
+                            >
+                              <Camera className="w-4 h-4" />
+                              <span>Ambil Foto</span>
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex-1 space-y-1">
+                ) : (
+                  /* TAMPILAN NORMAL: PRATINJAU FOTO & PILIHAN SUMBER */
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3">
+                      {/* Box Pratinjau Foto */}
+                      <div className="relative w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-slate-100 border-2 border-dashed border-slate-200 overflow-hidden shrink-0 flex items-center justify-center group">
+                        {isCompressingImage ? (
+                          <div className="flex flex-col items-center justify-center gap-1 text-blue-600 p-1 text-center">
+                            <RefreshCw className="w-5 h-5 animate-spin" />
+                            <span className="text-[9px] font-bold">Mengompres...</span>
+                          </div>
+                        ) : prodImageUrl ? (
+                          <>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={prodImageUrl} alt="Preview Produk" className="w-full h-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => setProdImageUrl('')}
+                              className="absolute inset-0 bg-black/60 text-white opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-1 transition-opacity text-[10px] font-bold cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4 text-rose-300" />
+                              <span>Hapus</span>
+                            </button>
+                          </>
+                        ) : (
+                          <div className="text-center p-2 text-slate-400">
+                            <Package className="w-7 h-7 mx-auto mb-0.5 opacity-50" />
+                            <span className="text-[9px] font-semibold leading-tight block">Tanpa Foto</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Tombol-tombol Sumber Foto */}
+                      <div className="flex-1 space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          {/* Tombol Buka Kamera */}
+                          <button
+                            type="button"
+                            onClick={() => startCamera('environment')}
+                            className="inline-flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs shadow-blue-600/20 transition-all cursor-pointer"
+                          >
+                            <Camera className="w-3.5 h-3.5" />
+                            <span>Buka Kamera</span>
+                          </button>
+
+                          {/* Tombol Pilih File Galeri */}
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="inline-flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
+                          >
+                            <ImageIcon className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Pilih Galeri</span>
+                          </button>
+                        </div>
+
+                        {/* Opsi Kamera HP Native */}
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                          <button
+                            type="button"
+                            onClick={() => nativeCameraInputRef.current?.click()}
+                            className="font-semibold text-blue-700 hover:text-blue-900 hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>Atau Kamera HP Bawaan</span>
+                          </button>
+                          {prodImageUrl && (
+                            <span className="text-[10px] font-semibold text-emerald-600">
+                              ✓ Foto Tersedia
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Hidden file inputs */}
                     <input
+                      ref={fileInputRef}
                       type="file"
                       accept="image/*"
                       onChange={handleImageFileChange}
-                      className="block w-full text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+                      className="hidden"
                     />
                     <input
-                      type="url"
-                      placeholder="Atau input URL gambar langsung..."
-                      value={prodImageUrl}
-                      onChange={(e) => setProdImageUrl(e.target.value)}
-                      className="w-full p-2 rounded-lg border border-slate-200 text-[11px] outline-none"
+                      ref={nativeCameraInputRef}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handleImageFileChange}
+                      className="hidden"
                     />
+
+                    {/* Input URL Gambar Langsung */}
+                    <div className="pt-1">
+                      <input
+                        type="url"
+                        placeholder="Atau tempel URL gambar web langsung (https://...)"
+                        value={prodImageUrl}
+                        onChange={(e) => setProdImageUrl(e.target.value)}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 text-[11px] outline-none focus:border-blue-500 font-medium"
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               <div className="flex items-center gap-2 pt-1">
@@ -649,14 +1053,15 @@ export default function AturBarangPage() {
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setProductModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all"
+                  onClick={handleCloseProductModal}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-600/20 transition-all cursor-pointer"
+                  disabled={isCompressingImage || isCameraActive}
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-blue-600/20 transition-all cursor-pointer"
                 >
                   Simpan Barang
                 </button>

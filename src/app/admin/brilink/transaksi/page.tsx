@@ -21,12 +21,27 @@ import {
   DollarSign,
   Coins,
   Receipt,
+  Landmark,
+  Wallet,
+  Check,
 } from 'lucide-react';
 import { dataService } from '@/lib/services/dataService';
-import { BrilinkPeriod, BrilinkDailyTransaction, CustomerFundEntry, DebtItem } from '@/lib/types/database';
+import {
+  BrilinkPeriod,
+  BrilinkDailyTransaction,
+  CustomerFundEntry,
+  DebtItem,
+  BalanceEntryItem,
+} from '@/lib/types/database';
 import { formatRupiah } from '@/lib/utils/currency';
 import { formatDateID, MONTH_NAMES_ID } from '@/lib/utils/date';
-import { calculateDailyIncome, parseDebtNotes, formatDebtNotes } from '@/lib/utils/calculations';
+import {
+  calculateDailyIncome,
+  parseDebtNotes,
+  formatDebtNotes,
+  parseTransactionNotes,
+  formatTransactionNotes,
+} from '@/lib/utils/calculations';
 import { exportMonthlyTransactionsToExcel } from '@/lib/utils/exportExcel';
 import { exportMonthlyTransactionsToPdf } from '@/lib/utils/exportPdf';
 
@@ -55,19 +70,60 @@ export default function LaporanTransaksiPage() {
   // Delete Confirm Modal
   const [deleteConfirm, setDeleteConfirm] = useState<DailyTransactionRow | null>(null);
 
-  // Modal Rincian Uang Nasabah (Read-only view)
+  // Jumlah entri uang nasabah per tanggal
+  const [customerFundCounts, setCustomerFundCounts] = useState<Record<string, number>>({});
+
+  // Nominal modal aktif tersinkronisasi dari Submenu Modal
+  const [activeCapital, setActiveCapital] = useState<number>(0);
+
+  // Modal Akumulasi Uang Nasabah (Interactive input & history)
   const [customerFundModal, setCustomerFundModal] = useState<{
     open: boolean;
     date: string;
     items: CustomerFundEntry[];
     total: number;
     loading: boolean;
+    newName: string;
+    newAmount: string;
+    newNotes: string;
+    isSubmitting: boolean;
+    error: string;
   }>({
     open: false,
     date: '',
     items: [],
     total: 0,
     loading: false,
+    newName: '',
+    newAmount: '',
+    newNotes: '',
+    isSubmitting: false,
+    error: '',
+  });
+
+  // Modal Akumulasi Saldo (Brimo / BPD)
+  const [balanceModal, setBalanceModal] = useState<{
+    open: boolean;
+    rowId: string;
+    date: string;
+    field: 'brimo' | 'bpd';
+    title: string;
+    items: BalanceEntryItem[];
+    newAmount: string;
+    newNote: string;
+    isSubmitting: boolean;
+    error: string;
+  }>({
+    open: false,
+    rowId: '',
+    date: '',
+    field: 'brimo',
+    title: '',
+    items: [],
+    newAmount: '',
+    newNote: '',
+    isSubmitting: false,
+    error: '',
   });
 
   // Modal Multi-Item Catatan Utang
@@ -110,18 +166,25 @@ export default function LaporanTransaksiPage() {
     try {
       setLoading(true);
       setErrorMsg('');
-      const data = await dataService.getDailyTransactions(periodId);
+      const [data, allFunds, totalActiveCap] = await Promise.all([
+        dataService.getDailyTransactions(periodId),
+        dataService.getCustomerFunds(),
+        dataService.getTotalActiveCapital(),
+      ]);
+
+      const counts: Record<string, number> = {};
+      allFunds.forEach((f) => {
+        counts[f.entry_date] = (counts[f.entry_date] || 0) + 1;
+      });
+      setCustomerFundCounts(counts);
+      setActiveCapital(totalActiveCap);
+
       setRows(
-        data.map((t) => {
-          const { items: debtItems, generalNote } = parseDebtNotes(t.notes, Number(t.debt_notes) || 0);
-          return {
-            ...t,
-            notes: generalNote,
-            debt_items: debtItems,
-            isNew: false,
-            isDirty: false,
-          };
-        })
+        data.map((t) => ({
+          ...t,
+          isNew: false,
+          isDirty: false,
+        }))
       );
     } catch (e: any) {
       console.error('Gagal memuat transaksi harian:', e);
@@ -169,10 +232,9 @@ export default function LaporanTransaksiPage() {
     let totalCash = 0;
     let totalBrimo = 0;
     let totalPayfazz = 0;
-    let totalBrilian = 0;
+    let totalBpd = 0;
     let totalCustomerFunds = 0;
     let totalDebt = 0;
-    let totalCapital = 0;
     let totalIncome = 0;
 
     for (const t of rows) {
@@ -180,25 +242,28 @@ export default function LaporanTransaksiPage() {
       totalCash += Number(t.cash_amount) || 0;
       totalBrimo += Number(t.brimo_balance) || 0;
       totalPayfazz += Number(t.payfazz_balance) || 0;
-      totalBrilian += Number(t.brilian_balance) || 0;
+      totalBpd += Number(t.bpd_balance !== undefined ? t.bpd_balance : t.brilian_balance) || 0;
       totalCustomerFunds += Number(t.customer_funds) || 0;
       totalDebt += Number(t.debt_notes) || 0;
-      totalCapital += Number(t.daily_capital) || 0;
       totalIncome += Number(t.daily_income) || 0;
     }
+
+    // Modal dihitung sebagai satu modal aktif dari Submenu Modal, bukan akumulasi penjumlahan berulang per hari
+    const currentCapital = activeCapital || (rows.length > 0 ? (Number(rows[0].daily_capital) || 0) : 0);
 
     return {
       totalCount,
       totalCash,
       totalBrimo,
       totalPayfazz,
-      totalBrilian,
+      totalBrilian: totalBpd,
+      totalBpd,
       totalCustomerFunds,
       totalDebt,
-      totalCapital,
+      totalCapital: currentCapital,
       totalIncome,
     };
-  }, [rows]);
+  }, [rows, activeCapital]);
 
   // Handle Cell Value Change (Excel-Style Inline Editing)
   const handleCellChange = (id: string, field: keyof BrilinkDailyTransaction, value: any) => {
@@ -218,6 +283,7 @@ export default function LaporanTransaksiPage() {
           brimo_balance: updated.brimo_balance,
           payfazz_balance: updated.payfazz_balance,
           brilian_balance: updated.brilian_balance,
+          bpd_balance: updated.bpd_balance,
           debt_notes: updated.debt_notes,
           daily_capital: updated.daily_capital,
           customer_funds: updated.customer_funds,
@@ -240,16 +306,17 @@ export default function LaporanTransaksiPage() {
     const todayIso = new Date().toISOString().split('T')[0];
     const defaultDate = todayIso.startsWith(`${y}-${m}`) ? todayIso : `${y}-${m}-01`;
 
-    // Cek agregasi awal Uang Nasabah dan Modal untuk tanggal ini
+    // Cek agregasi awal Uang Nasabah dan Modal aktif untuk baris baru
     let initialFunds = 0;
-    let initialCapital = 0;
+    let initialCapital = activeCapital;
     try {
-      const [allF, allC] = await Promise.all([
+      const [allF, currentCapital] = await Promise.all([
         dataService.getCustomerFunds({ date: defaultDate }),
-        dataService.getCapitalEntries(),
+        dataService.getTotalActiveCapital(),
       ]);
       initialFunds = allF.reduce((s, f) => s + (Number(f.amount) || 0), 0);
-      initialCapital = allC.filter((c) => c.entry_date === defaultDate).reduce((s, c) => s + (Number(c.amount) || 0), 0);
+      initialCapital = currentCapital;
+      setActiveCapital(currentCapital);
     } catch {
       // Abaikan jika offline
     }
@@ -263,6 +330,7 @@ export default function LaporanTransaksiPage() {
       brimo_balance: 0,
       payfazz_balance: 0,
       brilian_balance: 0,
+      bpd_balance: 0,
       customer_funds: initialFunds,
       debt_notes: 0,
       daily_capital: initialCapital,
@@ -271,12 +339,15 @@ export default function LaporanTransaksiPage() {
         brimo_balance: 0,
         payfazz_balance: 0,
         brilian_balance: 0,
+        bpd_balance: 0,
         debt_notes: 0,
         daily_capital: initialCapital,
         customer_funds: initialFunds,
       }),
       notes: '',
       debt_items: [],
+      brimo_items: [],
+      bpd_items: [],
       isNew: true,
       isDirty: true,
     };
@@ -302,6 +373,7 @@ export default function LaporanTransaksiPage() {
     try {
       let savedCount = 0;
       for (const r of dirtyRows) {
+        const bpdVal = Number(r.bpd_balance !== undefined ? r.bpd_balance : r.brilian_balance) || 0;
         await dataService.saveDailyTransaction({
           id: r.isNew ? undefined : r.id,
           period_id: selectedPeriodId,
@@ -310,12 +382,15 @@ export default function LaporanTransaksiPage() {
           cash_amount: Number(r.cash_amount) || 0,
           brimo_balance: Number(r.brimo_balance) || 0,
           payfazz_balance: Number(r.payfazz_balance) || 0,
-          brilian_balance: Number(r.brilian_balance) || 0,
+          brilian_balance: bpdVal,
+          bpd_balance: bpdVal,
           customer_funds: Number(r.customer_funds) || 0,
           debt_notes: Number(r.debt_notes) || 0,
           daily_capital: Number(r.daily_capital) || 0,
           notes: r.notes || '',
           debt_items: r.debt_items || [],
+          brimo_items: r.brimo_items || [],
+          bpd_items: r.bpd_items || [],
         });
         savedCount++;
       }
@@ -369,7 +444,9 @@ export default function LaporanTransaksiPage() {
     }
   };
 
-  // Buka Modal Rincian Uang Nasabah
+  // ==========================================
+  // AKUMULASI UANG NASABAH (LANGSUNG DI LAPORAN HARIAN)
+  // ==========================================
   const handleOpenCustomerFunds = async (date: string) => {
     setCustomerFundModal({
       open: true,
@@ -377,22 +454,284 @@ export default function LaporanTransaksiPage() {
       items: [],
       total: 0,
       loading: true,
+      newName: '',
+      newAmount: '',
+      newNotes: '',
+      isSubmitting: false,
+      error: '',
     });
 
     try {
       const items = await dataService.getCustomerFunds({ date });
       const total = items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-      setCustomerFundModal({
+      setCustomerFundModal((prev) => ({
+        ...prev,
         open: true,
         date,
         items,
         total,
         loading: false,
-      });
-    } catch (err) {
+      }));
+    } catch (err: any) {
       console.error(err);
-      setCustomerFundModal((prev) => ({ ...prev, loading: false }));
+      setCustomerFundModal((prev) => ({
+        ...prev,
+        loading: false,
+        error: err.message || 'Gagal memuat rincian uang nasabah.',
+      }));
     }
+  };
+
+  const handleAddCustomerFund = async () => {
+    const num = Number(customerFundModal.newAmount);
+    if (!customerFundModal.newAmount || isNaN(num) || num <= 0) {
+      setCustomerFundModal((prev) => ({
+        ...prev,
+        error: 'Nominal uang nasabah harus berupa angka lebih besar dari Rp 0.',
+      }));
+      return;
+    }
+
+    setCustomerFundModal((prev) => ({ ...prev, isSubmitting: true, error: '' }));
+
+    try {
+      const created = await dataService.createCustomerFund({
+        entry_date: customerFundModal.date,
+        customer_name: customerFundModal.newName.trim() || 'Nasabah',
+        amount: num,
+        notes: customerFundModal.newNotes.trim() || undefined,
+      });
+
+      const updatedItems = [created, ...customerFundModal.items];
+      const newTotal = updatedItems.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+
+      setCustomerFundModal((prev) => ({
+        ...prev,
+        items: updatedItems,
+        total: newTotal,
+        newAmount: '',
+        newName: '',
+        newNotes: '',
+        isSubmitting: false,
+      }));
+
+      // Update baris transaksi tanggal tersebut di state rows
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.transaction_date !== customerFundModal.date) return r;
+
+          const updated: DailyTransactionRow = {
+            ...r,
+            customer_funds: newTotal,
+          };
+
+          updated.daily_income = calculateDailyIncome({
+            cash_amount: updated.cash_amount,
+            brimo_balance: updated.brimo_balance,
+            payfazz_balance: updated.payfazz_balance,
+            brilian_balance: updated.brilian_balance,
+            bpd_balance: updated.bpd_balance,
+            debt_notes: updated.debt_notes,
+            daily_capital: updated.daily_capital,
+            customer_funds: newTotal,
+          });
+
+          return updated;
+        })
+      );
+
+      // Refresh customerFundCounts
+      setCustomerFundCounts((prev) => ({
+        ...prev,
+        [customerFundModal.date]: updatedItems.length,
+      }));
+
+      notify(`Uang nasabah ${created.customer_name} (${formatRupiah(num)}) berhasil ditambahkan ke tanggal ini.`);
+    } catch (err: any) {
+      setCustomerFundModal((prev) => ({
+        ...prev,
+        isSubmitting: false,
+        error: err.message || 'Gagal menyimpan uang nasabah.',
+      }));
+    }
+  };
+
+  const handleDeleteCustomerFund = async (fundId: string) => {
+    if (!window.confirm('Yakin ingin menghapus catatan uang nasabah ini?')) return;
+
+    try {
+      await dataService.deleteCustomerFund(fundId);
+      const updatedItems = customerFundModal.items.filter((it) => it.id !== fundId);
+      const newTotal = updatedItems.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+
+      setCustomerFundModal((prev) => ({
+        ...prev,
+        items: updatedItems,
+        total: newTotal,
+      }));
+
+      // Update baris transaksi
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.transaction_date !== customerFundModal.date) return r;
+
+          const updated: DailyTransactionRow = {
+            ...r,
+            customer_funds: newTotal,
+          };
+
+          updated.daily_income = calculateDailyIncome({
+            cash_amount: updated.cash_amount,
+            brimo_balance: updated.brimo_balance,
+            payfazz_balance: updated.payfazz_balance,
+            brilian_balance: updated.brilian_balance,
+            bpd_balance: updated.bpd_balance,
+            debt_notes: updated.debt_notes,
+            daily_capital: updated.daily_capital,
+            customer_funds: newTotal,
+          });
+
+          return updated;
+        })
+      );
+
+      setCustomerFundCounts((prev) => ({
+        ...prev,
+        [customerFundModal.date]: updatedItems.length,
+      }));
+
+      notify('Catatan uang nasabah berhasil dihapus.');
+    } catch (err: any) {
+      alert(err.message || 'Gagal menghapus uang nasabah.');
+    }
+  };
+
+  // ==========================================
+  // AKUMULASI SALDO BRIMO & SALDO BPD (MODAL INLINE)
+  // ==========================================
+  const handleOpenBalanceModal = (row: DailyTransactionRow, field: 'brimo' | 'bpd') => {
+    const isBrimo = field === 'brimo';
+    let existingItems: BalanceEntryItem[] = [];
+
+    if (isBrimo) {
+      if (row.brimo_items && row.brimo_items.length > 0) {
+        existingItems = [...row.brimo_items];
+      } else if (Number(row.brimo_balance) > 0) {
+        existingItems = [
+          {
+            id: `init-brimo-${Date.now()}`,
+            amount: Number(row.brimo_balance),
+            notes: 'Saldo Awal BRIMO',
+            timestamp: row.created_at || 'Saldo Awal',
+          },
+        ];
+      }
+    } else {
+      const bpdVal = Number(row.bpd_balance !== undefined ? row.bpd_balance : row.brilian_balance) || 0;
+      if (row.bpd_items && row.bpd_items.length > 0) {
+        existingItems = [...row.bpd_items];
+      } else if (bpdVal > 0) {
+        existingItems = [
+          {
+            id: `init-bpd-${Date.now()}`,
+            amount: bpdVal,
+            notes: 'Saldo Awal BPD',
+            timestamp: row.created_at || 'Saldo Awal',
+          },
+        ];
+      }
+    }
+
+    setBalanceModal({
+      open: true,
+      rowId: row.id,
+      date: row.transaction_date,
+      field,
+      title: isBrimo ? 'Saldo BRIMO' : 'Saldo BPD',
+      items: existingItems,
+      newAmount: '',
+      newNote: '',
+      isSubmitting: false,
+      error: '',
+    });
+  };
+
+  const handleAddBalanceItem = () => {
+    const num = Number(balanceModal.newAmount);
+    if (!balanceModal.newAmount || isNaN(num) || num <= 0) {
+      setBalanceModal((prev) => ({ ...prev, error: 'Nominal tambahan harus berupa angka lebih besar dari Rp 0.' }));
+      return;
+    }
+
+    setBalanceModal((prev) => ({ ...prev, isSubmitting: true, error: '' }));
+
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} WIB`;
+
+    const newItem: BalanceEntryItem = {
+      id: `bal-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      amount: num,
+      notes: balanceModal.newNote.trim() || undefined,
+      timestamp: timeStr,
+    };
+
+    setBalanceModal((prev) => ({
+      ...prev,
+      items: [...prev.items, newItem],
+      newAmount: '',
+      newNote: '',
+      isSubmitting: false,
+      error: '',
+    }));
+  };
+
+  const handleDeleteBalanceItem = (id: string) => {
+    setBalanceModal((prev) => ({
+      ...prev,
+      items: prev.items.filter((it) => it.id !== id),
+    }));
+  };
+
+  const handleSaveBalanceModal = () => {
+    const computedTotal = balanceModal.items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+    const isBrimo = balanceModal.field === 'brimo';
+
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== balanceModal.rowId) return r;
+
+        const updated: DailyTransactionRow = {
+          ...r,
+          ...(isBrimo
+            ? {
+                brimo_balance: computedTotal,
+                brimo_items: balanceModal.items,
+              }
+            : {
+                brilian_balance: computedTotal,
+                bpd_balance: computedTotal,
+                bpd_items: balanceModal.items,
+              }),
+          isDirty: true,
+        };
+
+        updated.daily_income = calculateDailyIncome({
+          cash_amount: updated.cash_amount,
+          brimo_balance: updated.brimo_balance,
+          payfazz_balance: updated.payfazz_balance,
+          brilian_balance: updated.brilian_balance,
+          bpd_balance: updated.bpd_balance,
+          debt_notes: updated.debt_notes,
+          daily_capital: updated.daily_capital,
+          customer_funds: updated.customer_funds,
+        });
+
+        return updated;
+      })
+    );
+
+    setBalanceModal((prev) => ({ ...prev, open: false }));
+    notify(`Akumulasi ${balanceModal.title} tanggal ${formatDateID(balanceModal.date, false)} berhasil diperbarui (${formatRupiah(computedTotal)}).`);
   };
 
   // Buka Modal Rincian Multi-Item Catatan Utang
@@ -429,6 +768,7 @@ export default function LaporanTransaksiPage() {
           brimo_balance: updated.brimo_balance,
           payfazz_balance: updated.payfazz_balance,
           brilian_balance: updated.brilian_balance,
+          bpd_balance: updated.bpd_balance,
           debt_notes: computedTotal,
           daily_capital: updated.daily_capital,
           customer_funds: updated.customer_funds,
@@ -648,7 +988,7 @@ export default function LaporanTransaksiPage() {
               {formatRupiah(summaryTotals.totalIncome)}
             </div>
             <p className="text-xs text-blue-200">
-              (Total Saldo + Kas + Utang) - Modal Harian - Uang Nasabah
+              (Total Saldo + Kas + Utang) - Modal - Uang Nasabah
             </p>
           </div>
 
@@ -687,10 +1027,10 @@ export default function LaporanTransaksiPage() {
                 <th className="py-3 px-2.5 w-36 text-right">Tunai (Rp)</th>
                 <th className="py-3 px-2.5 w-36 text-right">Saldo BRIMO (Rp)</th>
                 <th className="py-3 px-2.5 w-36 text-right">Saldo Payfazz (Rp)</th>
-                <th className="py-3 px-2.5 w-36 text-right">Saldo Brilian (Rp)</th>
+                <th className="py-3 px-2.5 w-36 text-right">Saldo BPD (Rp)</th>
                 <th className="py-3 px-2.5 w-36 text-right bg-blue-50/50">Uang Nasabah (Rp)</th>
                 <th className="py-3 px-2.5 w-36 text-right">Catatan Utang (Rp)</th>
-                <th className="py-3 px-2.5 w-36 text-right bg-indigo-50/50">Modal Hari Ini (Rp)</th>
+                <th className="py-3 px-2.5 w-36 text-right bg-indigo-50/50">Modal (Rp)</th>
                 <th className="py-3 px-2.5 w-40 text-right bg-emerald-50/50 text-emerald-900">Pendapatan (Rp)</th>
                 <th className="py-3 px-2.5 min-w-[140px]">Catatan</th>
                 <th className="py-3 px-2.5 w-24 text-center">Aksi</th>
@@ -762,15 +1102,21 @@ export default function LaporanTransaksiPage() {
                         />
                       </td>
 
-                      {/* Saldo BRIMO (Rp) */}
-                      <td className="py-2 px-2 text-right">
-                        <input
-                          type="number"
-                          step="1000"
-                          value={t.brimo_balance}
-                          onChange={(e) => handleCellChange(t.id, 'brimo_balance', Number(e.target.value) || 0)}
-                          className="w-32 px-2 py-1 rounded border border-slate-200 bg-white/90 text-right text-xs font-bold text-blue-700 outline-none focus:border-blue-500"
-                        />
+                      {/* Saldo BRIMO (Rp) - AKUMULASI EXCEL-STYLE */}
+                      <td className="py-2 px-2 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenBalanceModal(t, 'brimo')}
+                          className="w-full text-right p-1.5 rounded-lg border border-blue-200/80 bg-blue-50/20 hover:bg-blue-50/80 hover:border-blue-400 group transition-all cursor-pointer flex items-center justify-between gap-1.5 shadow-2xs"
+                          title="Klik untuk input akumulasi & lihat rincian Saldo BRIMO"
+                        >
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-800">
+                            {(t.brimo_items?.length || (t.brimo_balance > 0 ? 1 : 0))} input
+                          </span>
+                          <span className="font-bold text-xs text-blue-700 group-hover:underline">
+                            {formatRupiah(t.brimo_balance)}
+                          </span>
+                        </button>
                       </td>
 
                       {/* Saldo Payfazz (Rp) */}
@@ -784,31 +1130,40 @@ export default function LaporanTransaksiPage() {
                         />
                       </td>
 
-                      {/* Saldo Brilian (Rp) */}
-                      <td className="py-2 px-2 text-right">
-                        <input
-                          type="number"
-                          step="1000"
-                          value={t.brilian_balance}
-                          onChange={(e) => handleCellChange(t.id, 'brilian_balance', Number(e.target.value) || 0)}
-                          className="w-32 px-2 py-1 rounded border border-slate-200 bg-white/90 text-right text-xs font-bold text-violet-700 outline-none focus:border-blue-500"
-                        />
+                      {/* Saldo BPD (Rp) - AKUMULASI EXCEL-STYLE */}
+                      <td className="py-2 px-2 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenBalanceModal(t, 'bpd')}
+                          className="w-full text-right p-1.5 rounded-lg border border-violet-200/80 bg-violet-50/20 hover:bg-violet-50/80 hover:border-violet-400 group transition-all cursor-pointer flex items-center justify-between gap-1.5 shadow-2xs"
+                          title="Klik untuk input akumulasi & lihat rincian Saldo BPD"
+                        >
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-100 text-violet-800">
+                            {(t.bpd_items?.length || ((t.bpd_balance ?? t.brilian_balance) > 0 ? 1 : 0))} input
+                          </span>
+                          <span className="font-bold text-xs text-violet-700 group-hover:underline">
+                            {formatRupiah(t.bpd_balance !== undefined ? t.bpd_balance : t.brilian_balance)}
+                          </span>
+                        </button>
                       </td>
 
-                      {/* Uang Nasabah (Rp) - OTOMATIS DARI SUBMENU UANG NASABAH */}
+                      {/* Uang Nasabah (Rp) - AKUMULASI LANGSUNG */}
                       <td className="py-2 px-2 text-right bg-blue-50/30 whitespace-nowrap">
-                        <div
+                        <button
+                          type="button"
                           onClick={() => handleOpenCustomerFunds(t.transaction_date)}
-                          className="cursor-pointer group flex items-center justify-end gap-1.5"
-                          title="Klik untuk melihat rincian Uang Nasabah"
+                          className="w-full text-right p-1.5 rounded-lg border border-rose-200/80 bg-rose-50/20 hover:bg-rose-50/80 hover:border-rose-400 group transition-all cursor-pointer flex items-center justify-between gap-1.5 shadow-2xs"
+                          title="Klik untuk input akumulasi & lihat rincian Uang Nasabah"
                         >
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-blue-100 text-blue-700">
-                            Auto
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-100 text-rose-800">
+                            {customerFundCounts[t.transaction_date] !== undefined
+                              ? `${customerFundCounts[t.transaction_date]} nasabah`
+                              : 'Akumulasi'}
                           </span>
-                          <span className="font-bold text-rose-700 group-hover:underline">
+                          <span className="font-bold text-xs text-rose-700 group-hover:underline">
                             {formatRupiah(t.customer_funds)}
                           </span>
-                        </div>
+                        </button>
                       </td>
 
                       {/* Catatan Utang (Rp) - MULTI-ITEM POPUP / INLINE */}
@@ -827,11 +1182,11 @@ export default function LaporanTransaksiPage() {
                         </div>
                       </td>
 
-                      {/* Modal Hari Ini (Rp) - OTOMATIS DARI SUBMENU MODAL */}
+                      {/* Modal (Rp) - OTOMATIS TERSINKRONISASI DARI SUBMENU MODAL */}
                       <td className="py-2 px-2 text-right bg-indigo-50/30 whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5" title="Agregasi otomatis dari Submenu Modal">
+                        <div className="flex items-center justify-end gap-1.5" title="Nominal modal aktif tersinkronisasi dari Submenu Modal">
                           <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-indigo-100 text-indigo-700">
-                            Auto
+                            Modal
                           </span>
                           <span className="font-bold text-indigo-800">
                             {formatRupiah(t.daily_capital)}
@@ -912,7 +1267,7 @@ export default function LaporanTransaksiPage() {
                   <td className="py-3 px-2 text-right">{formatRupiah(summaryTotals.totalBrilian)}</td>
                   <td className="py-3 px-2 text-right bg-blue-50 text-rose-800">{formatRupiah(summaryTotals.totalCustomerFunds)}</td>
                   <td className="py-3 px-2 text-right">{formatRupiah(summaryTotals.totalDebt)}</td>
-                  <td className="py-3 px-2 text-right bg-indigo-50 text-indigo-900">{formatRupiah(summaryTotals.totalCapital)}</td>
+                  <td className="py-3 px-2 text-right bg-indigo-50 text-indigo-900" title="Satu modal aktif tersinkronisasi dari Submenu Modal">{formatRupiah(summaryTotals.totalCapital)}</td>
                   <td className="py-3 px-2 text-right bg-emerald-100 text-emerald-950 font-black text-sm whitespace-nowrap">
                     {formatRupiah(summaryTotals.totalIncome)}
                   </td>
@@ -1061,7 +1416,220 @@ export default function LaporanTransaksiPage() {
         </div>
       )}
 
-      {/* ================= MODAL RINCIAN UANG NASABAH (VIEW ONLY) ================= */}
+      {/* ================= MODAL AKUMULASI SALDO (BRIMO & BPD) ================= */}
+      {balanceModal.open && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 border border-slate-200 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                    balanceModal.field === 'brimo'
+                      ? 'bg-blue-50 text-blue-600'
+                      : 'bg-violet-50 text-violet-600'
+                  }`}
+                >
+                  <Landmark className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">
+                    Akumulasi {balanceModal.title}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Hari / Tanggal: {formatDateID(balanceModal.date, true)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBalanceModal((prev) => ({ ...prev, open: false }))}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Total Akumulasi Card */}
+            <div
+              className={`p-4 rounded-2xl border flex items-center justify-between ${
+                balanceModal.field === 'brimo'
+                  ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 text-blue-950'
+                  : 'bg-gradient-to-r from-violet-50 to-purple-50 border-violet-200 text-violet-950'
+              }`}
+            >
+              <div>
+                <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+                  Total Akumulasi Saat Ini:
+                </span>
+                <span className="text-xs text-slate-500">
+                  {balanceModal.items.length} rincian nominal tercatat
+                </span>
+              </div>
+              <div
+                className={`text-lg sm:text-xl font-black ${
+                  balanceModal.field === 'brimo' ? 'text-blue-700' : 'text-violet-700'
+                }`}
+              >
+                {formatRupiah(balanceModal.items.reduce((s, it) => s + (Number(it.amount) || 0), 0))}
+              </div>
+            </div>
+
+            {/* Form Input Tambah Nominal */}
+            <div className="space-y-2 bg-slate-50/70 p-3.5 rounded-2xl border border-slate-200">
+              <span className="text-xs font-bold text-slate-700 block">
+                + Tambah Nominal Baru ke Akumulasi:
+              </span>
+
+              {balanceModal.error && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-semibold">
+                  {balanceModal.error}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="flex-1">
+                    <input
+                      type="number"
+                      step="1000"
+                      min="1"
+                      placeholder="Nominal tambahan (Rp)..."
+                      value={balanceModal.newAmount}
+                      onChange={(e) =>
+                        setBalanceModal((prev) => ({ ...prev, newAmount: e.target.value, error: '' }))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddBalanceItem();
+                        }
+                      }}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-800 outline-none focus:border-blue-500"
+                    />
+                    {balanceModal.newAmount && Number(balanceModal.newAmount) > 0 && (
+                      <span className="text-[11px] font-semibold text-blue-600 mt-1 block">
+                        Preview: {formatRupiah(Number(balanceModal.newAmount))}
+                      </span>
+                    )}
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Keterangan / sumber (opsional)..."
+                    value={balanceModal.newNote}
+                    onChange={(e) =>
+                      setBalanceModal((prev) => ({ ...prev, newNote: e.target.value }))
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddBalanceItem();
+                      }
+                    }}
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-700 outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleAddBalanceItem}
+                  disabled={balanceModal.isSubmitting || !balanceModal.newAmount || Number(balanceModal.newAmount) <= 0}
+                  className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    balanceModal.newAmount && Number(balanceModal.newAmount) > 0
+                      ? balanceModal.field === 'brimo'
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs'
+                        : 'bg-violet-600 hover:bg-violet-700 text-white shadow-xs'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Tambahkan ke Akumulasi {balanceModal.title}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Riwayat / Daftar Rincian Nominal */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700">
+                  Daftar Nominal pada Tanggal Ini:
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  {balanceModal.items.length} item
+                </span>
+              </div>
+
+              <div className="max-h-52 overflow-y-auto space-y-1.5 rounded-xl border border-slate-200 p-2 bg-slate-50/40">
+                {balanceModal.items.length > 0 ? (
+                  balanceModal.items.map((item, idx) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between bg-white p-2.5 rounded-xl border border-slate-200/80 text-xs hover:bg-slate-50/80 transition-all"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-slate-400 w-5 text-center">
+                          {idx + 1}.
+                        </span>
+                        <div>
+                          <div className="font-bold text-slate-900">
+                            {formatRupiah(item.amount)}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {item.notes || 'Tanpa keterangan'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {item.timestamp && (
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            {item.timestamp}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteBalanceItem(item.id)}
+                          className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                          title="Hapus entri ini"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="py-6 text-center text-xs text-slate-400">
+                    Belum ada nominal yang diakumulasikan pada tanggal ini.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setBalanceModal((prev) => ({ ...prev, open: false }))}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveBalanceModal}
+                className={`px-5 py-2 rounded-xl text-white text-xs font-bold shadow-md cursor-pointer transition-all ${
+                  balanceModal.field === 'brimo'
+                    ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
+                    : 'bg-violet-600 hover:bg-violet-700 shadow-violet-600/20'
+                }`}
+              >
+                Selesai & Perbarui Baris
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL AKUMULASI UANG NASABAH (INTERACTIVE) ================= */}
       {customerFundModal.open && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 border border-slate-200 shadow-2xl space-y-4">
@@ -1071,9 +1639,11 @@ export default function LaporanTransaksiPage() {
                   <Users className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-black text-slate-900">Rincian Uang Nasabah</h3>
+                  <h3 className="text-sm font-black text-slate-900">
+                    Akumulasi Uang Nasabah
+                  </h3>
                   <p className="text-xs text-slate-500">
-                    {formatDateID(customerFundModal.date, true)}
+                    Hari / Tanggal: {formatDateID(customerFundModal.date, true)}
                   </p>
                 </div>
               </div>
@@ -1086,45 +1656,168 @@ export default function LaporanTransaksiPage() {
               </button>
             </div>
 
-            {customerFundModal.loading ? (
-              <div className="py-8 text-center text-xs text-slate-400">Memuat rincian uang nasabah...</div>
-            ) : customerFundModal.items.length > 0 ? (
-              <div className="space-y-3">
-                <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
+            {/* Total Akumulasi Card */}
+            <div className="p-4 rounded-2xl border bg-gradient-to-r from-rose-50 to-pink-50 border-rose-200 text-rose-950 flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+                  Total Uang Nasabah Tanggal Ini:
+                </span>
+                <span className="text-xs text-slate-500">
+                  {customerFundModal.items.length} catatan nasabah tercatat
+                </span>
+              </div>
+              <div className="text-lg sm:text-xl font-black text-rose-700">
+                {formatRupiah(customerFundModal.total)}
+              </div>
+            </div>
+
+            {/* Form Input Tambah Uang Nasabah Baru */}
+            <div className="space-y-2 bg-slate-50/70 p-3.5 rounded-2xl border border-slate-200">
+              <span className="text-xs font-bold text-slate-700 block">
+                + Tambah Uang Nasabah Baru ke Tanggal Ini:
+              </span>
+
+              {customerFundModal.error && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-semibold">
+                  {customerFundModal.error}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="flex-1">
+                    <input
+                      type="number"
+                      step="1000"
+                      min="1"
+                      placeholder="Nominal (Rp)..."
+                      value={customerFundModal.newAmount}
+                      onChange={(e) =>
+                        setCustomerFundModal((prev) => ({ ...prev, newAmount: e.target.value, error: '' }))
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-800 outline-none focus:border-rose-500"
+                    />
+                    {customerFundModal.newAmount && Number(customerFundModal.newAmount) > 0 && (
+                      <span className="text-[11px] font-semibold text-rose-600 mt-1 block">
+                        Preview: {formatRupiah(Number(customerFundModal.newAmount))}
+                      </span>
+                    )}
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Nama nasabah (misal: Bu Siti)..."
+                    value={customerFundModal.newName}
+                    onChange={(e) =>
+                      setCustomerFundModal((prev) => ({ ...prev, newName: e.target.value }))
+                    }
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-700 outline-none focus:border-rose-500 font-semibold"
+                  />
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2 items-center">
+                  <input
+                    type="text"
+                    placeholder="Keperluan / catatan (misal: Titipan tarik tunai)..."
+                    value={customerFundModal.newNotes}
+                    onChange={(e) =>
+                      setCustomerFundModal((prev) => ({ ...prev, newNotes: e.target.value }))
+                    }
+                    className="w-full sm:flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-700 outline-none focus:border-rose-500"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={handleAddCustomerFund}
+                    disabled={
+                      customerFundModal.isSubmitting ||
+                      !customerFundModal.newAmount ||
+                      Number(customerFundModal.newAmount) <= 0
+                    }
+                    className={`w-full sm:w-auto py-2 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0 ${
+                      customerFundModal.newAmount && Number(customerFundModal.newAmount) > 0
+                        ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs'
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    }`}
+                  >
+                    {customerFundModal.isSubmitting ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Menyimpan...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>+ Tambah</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Riwayat / Daftar Rincian Nasabah */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700">
+                  Daftar Titipan Nasabah pada Tanggal Ini:
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  {customerFundModal.items.length} nasabah
+                </span>
+              </div>
+
+              {customerFundModal.loading ? (
+                <div className="py-8 text-center text-xs text-slate-400">
+                  <div className="w-5 h-5 border-2 border-rose-600 border-t-transparent rounded-full animate-spin mx-auto mb-1.5" />
+                  <span>Memuat rincian uang nasabah...</span>
+                </div>
+              ) : customerFundModal.items.length > 0 ? (
+                <div className="max-h-52 overflow-y-auto space-y-1.5 rounded-xl border border-slate-200 p-2 bg-slate-50/40">
                   {customerFundModal.items.map((item, idx) => (
-                    <div key={item.id} className="p-3 flex items-center justify-between text-xs hover:bg-slate-50">
-                      <div>
-                        <div className="font-bold text-slate-900">{idx + 1}. {item.customer_name}</div>
-                        {item.notes && <div className="text-[11px] text-slate-500 mt-0.5">{item.notes}</div>}
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between bg-white p-2.5 rounded-xl border border-slate-200/80 text-xs hover:bg-slate-50/80 transition-all"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-slate-400 w-5 text-center">
+                          {idx + 1}.
+                        </span>
+                        <div>
+                          <div className="font-bold text-slate-900">{item.customer_name}</div>
+                          {item.notes && <div className="text-[11px] text-slate-500">{item.notes}</div>}
+                        </div>
                       </div>
-                      <div className="font-bold text-rose-700 text-right">
-                        {formatRupiah(item.amount)}
+
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-rose-700">
+                          {formatRupiah(item.amount)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCustomerFund(item.id)}
+                          className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                          title="Hapus entri ini"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
-
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between">
-                  <span className="text-xs font-bold text-rose-900">Total Uang Nasabah:</span>
-                  <span className="text-sm font-black text-rose-700">
-                    {formatRupiah(customerFundModal.total)}
-                  </span>
+              ) : (
+                <div className="py-6 text-center text-xs text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                  Belum ada catatan uang nasabah untuk tanggal ini.
                 </div>
-              </div>
-            ) : (
-              <div className="py-8 text-center space-y-2">
-                <p className="text-xs text-slate-500">
-                  Belum ada catatan rincian nasabah untuk tanggal ini pada Submenu Uang Nasabah.
-                </p>
-              </div>
-            )}
+              )}
+            </div>
 
             <div className="flex items-center justify-between pt-2 border-t border-slate-100">
               <Link
                 href={`/admin/brilink/uang-nasabah?date=${customerFundModal.date}`}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold transition-colors"
               >
-                <span>Kelola di Submenu Uang Nasabah</span>
+                <span>Halaman Penuh Uang Nasabah</span>
                 <ArrowUpRight className="w-3.5 h-3.5" />
               </Link>
               <button
