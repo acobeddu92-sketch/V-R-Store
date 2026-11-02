@@ -69,15 +69,29 @@ export function getDaysInMonth(year: number, month: number): number {
 
 /**
  * Menghitung tanggal jatuh tempo ke-N dari tanggal mulai (join_date),
- * dengan menangani aturan akhir bulan (misal tgl 31 ke akhir Feb).
+ * dengan menangani aturan akhir bulan (misal tgl 31 ke akhir Feb)
+ * dan parsing tanggal lokal yang kebal terhadap pergeseran UTC.
  */
 export function getAnniversaryDate(joinDateStr: string, monthOffset: number): Date {
-  const start = new Date(joinDateStr);
-  const startDay = start.getDate();
+  let startYear: number;
+  let startMonth: number;
+  let startDay: number;
+
+  if (typeof joinDateStr === 'string' && joinDateStr.includes('-')) {
+    const parts = joinDateStr.split('T')[0].split('-').map(Number);
+    startYear = parts[0];
+    startMonth = parts[1] - 1; // 0-indexed (Jan = 0)
+    startDay = parts[2];
+  } else {
+    const start = new Date(joinDateStr);
+    startYear = start.getFullYear();
+    startMonth = start.getMonth();
+    startDay = start.getDate();
+  }
   
   // Target tahun dan bulan
-  let targetYear = start.getFullYear();
-  let targetMonth = start.getMonth() + monthOffset;
+  let targetYear = startYear;
+  let targetMonth = startMonth + monthOffset;
   
   // Normalisasi jika targetMonth >= 12
   while (targetMonth >= 12) {
@@ -89,5 +103,5 @@ export function getAnniversaryDate(joinDateStr: string, monthOffset: number): Da
   const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
   const actualDay = Math.min(startDay, daysInTargetMonth);
   
-  return new Date(targetYear, targetMonth, actualDay);
+  return new Date(targetYear, targetMonth, actualDay, 0, 0, 0, 0);
 }

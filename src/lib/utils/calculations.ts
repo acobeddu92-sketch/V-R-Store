@@ -61,18 +61,44 @@ export function generateInvestorCommissions(
     };
   }
 
-  const joinDate = new Date(investor.join_date);
-  const effectiveEndDate = investor.status === 'terminated' && investor.termination_date
-    ? new Date(investor.termination_date)
-    : asOfDate;
+  // Parse tanggal masuk (join_date) secara aman di timezone lokal
+  let joinDate: Date;
+  if (typeof investor.join_date === 'string' && investor.join_date.includes('-')) {
+    const parts = investor.join_date.split('T')[0].split('-').map(Number);
+    joinDate = new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0);
+  } else {
+    joinDate = new Date(investor.join_date);
+  }
+
+  // Batas akhir periode efektif (bulan berjalan atau tanggal terminasi)
+  let effectiveEndDate: Date;
+  if (investor.status === 'terminated' && investor.termination_date) {
+    if (typeof investor.termination_date === 'string' && investor.termination_date.includes('-')) {
+      const parts = investor.termination_date.split('T')[0].split('-').map(Number);
+      effectiveEndDate = new Date(parts[0], parts[1] - 1, parts[2], 23, 59, 59, 999);
+    } else {
+      effectiveEndDate = new Date(investor.termination_date);
+    }
+  } else {
+    // Akhir hari lokal pada asOfDate (bulan kalender berjalan saat ini)
+    effectiveEndDate = new Date(
+      asOfDate.getFullYear(),
+      asOfDate.getMonth(),
+      asOfDate.getDate(),
+      23,
+      59,
+      59,
+      999
+    );
+  }
 
   // Hitung selisih hari
   const diffTime = effectiveEndDate.getTime() - joinDate.getTime();
   const durationDays = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
 
-  // Cek apakah sudah genap 1 bulan penuh (minimal 30 hari atau anniversary pertama)
+  // Cek apakah sudah genap 1 bulan penuh (anniversary pertama sudah tercapai dalam rentang durasi)
   const firstAnniversary = getAnniversaryDate(investor.join_date, 1);
-  const isEligible = durationDays >= 30 && effectiveEndDate >= firstAnniversary;
+  const isEligible = effectiveEndDate >= firstAnniversary && durationDays >= 28;
 
   if (!isEligible) {
     return {
@@ -98,6 +124,7 @@ export function generateInvestorCommissions(
 
     const periodMonth = anniversary.getMonth() + 1;
     const periodYear = anniversary.getFullYear();
+    const anniversaryStr = `${periodYear}-${String(periodMonth).padStart(2, '0')}-${String(anniversary.getDate()).padStart(2, '0')}`;
 
     commissions.push({
       id: `${investor.id}-${periodYear}-${periodMonth}`,
@@ -106,7 +133,7 @@ export function generateInvestorCommissions(
       period_month: periodMonth,
       period_year: periodYear,
       full_month_index: monthIndex,
-      anniversary_date: anniversary.toISOString().split('T')[0],
+      anniversary_date: anniversaryStr,
       commission_amount: baseRateCommission,
       status: 'earned',
       created_at: anniversary.toISOString(),

@@ -1334,16 +1334,17 @@ class DataService {
 
     if (this.isSupabaseConfigured()) {
       const supabase = createClient();
-      if (supabase) {
-        const { data, error } = await supabase
-          .from('investors')
-          .select('*')
-          .order('join_date', { ascending: true });
-        if (!error && data) list = data as Investor[];
+      if (!supabase) throw new Error('Klien database Supabase tidak terinisialisasi.');
+      const { data, error } = await supabase
+        .from('investors')
+        .select('*')
+        .order('join_date', { ascending: true });
+      if (error) {
+        console.error('Supabase getInvestors error:', error);
+        throw new Error(`Gagal memuat data investor dari database: ${error.message}`);
       }
-    }
-
-    if (list.length === 0) {
+      if (data) list = data as Investor[];
+    } else {
       list = getLocalItem<Investor[]>('investors', DEFAULT_INVESTORS);
     }
 
@@ -1375,24 +1376,27 @@ class DataService {
       throw new Error('Jumlah pokok investasi harus lebih besar dari 0.');
     }
 
+    if (this.isSupabaseConfigured()) {
+      const supabase = createClient();
+      if (!supabase) throw new Error('Klien database Supabase tidak terinisialisasi.');
+      const { data, error } = await supabase
+        .from('investors')
+        .insert([inv])
+        .select()
+        .single();
+      if (error) {
+        console.error('Supabase createInvestor error:', error);
+        throw new Error(`Gagal menyimpan data investor ke database: ${error.message}`);
+      }
+      if (data) return data as Investor;
+    }
+
     const newRecord: Investor = {
       ...inv,
       id: `inv-${Date.now()}`,
       status: 'active',
       created_at: new Date().toISOString(),
     };
-
-    if (this.isSupabaseConfigured()) {
-      const supabase = createClient();
-      if (supabase) {
-        const { data, error } = await supabase
-          .from('investors')
-          .insert([inv])
-          .select()
-          .single();
-        if (!error && data) return data as Investor;
-      }
-    }
 
     const current = getLocalItem<Investor[]>('investors', DEFAULT_INVESTORS);
     const updated = [...current, newRecord];
@@ -1403,15 +1407,18 @@ class DataService {
   async updateInvestor(id: string, inv: Partial<Investor>): Promise<Investor> {
     if (this.isSupabaseConfigured()) {
       const supabase = createClient();
-      if (supabase) {
-        const { data, error } = await supabase
-          .from('investors')
-          .update(inv)
-          .eq('id', id)
-          .select()
-          .single();
-        if (!error && data) return data as Investor;
+      if (!supabase) throw new Error('Klien database Supabase tidak terinisialisasi.');
+      const { data, error } = await supabase
+        .from('investors')
+        .update(inv)
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) {
+        console.error('Supabase updateInvestor error:', error);
+        throw new Error(`Gagal memperbarui data investor di database: ${error.message}`);
       }
+      if (data) return data as Investor;
     }
 
     const current = getLocalItem<Investor[]>('investors', DEFAULT_INVESTORS);
@@ -1420,6 +1427,26 @@ class DataService {
     const item = updated.find((i) => i.id === id);
     if (!item) throw new Error('Data investor tidak ditemukan');
     return item;
+  }
+
+  async deleteInvestor(id: string): Promise<boolean> {
+    if (this.isSupabaseConfigured()) {
+      const supabase = createClient();
+      if (!supabase) {
+        throw new Error('Klien database Supabase tidak terinisialisasi.');
+      }
+      const { error } = await supabase.from('investors').delete().eq('id', id);
+      if (error) {
+        console.error('Supabase deleteInvestor error:', error);
+        throw new Error(`Gagal menghapus data investor dari database: ${error.message}`);
+      }
+      return true;
+    }
+
+    const current = getLocalItem<Investor[]>('investors', DEFAULT_INVESTORS);
+    const updated = current.filter((i) => i.id !== id);
+    setLocalItem('investors', updated);
+    return true;
   }
 
   async terminateInvestor(id: string, terminationDate: string, returnedPrincipal: number): Promise<Investor> {

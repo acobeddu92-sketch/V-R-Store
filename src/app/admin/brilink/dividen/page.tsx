@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   UserCheck,
   HelpCircle,
+  Loader2,
 } from 'lucide-react';
 import { dataService } from '@/lib/services/dataService';
 import { Investor } from '@/lib/types/database';
@@ -47,16 +48,24 @@ export default function DividenBrilinkPage() {
   const [terminationDate, setTerminationDate] = useState(new Date().toISOString().split('T')[0]);
   const [returnedAmount, setReturnedAmount] = useState<number>(0);
 
-  // Success Alert
+  // Modal Konfirmasi Hapus Investor
+  const [deleteConfirm, setDeleteConfirm] = useState<Investor | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  // Alerts & Notifications
   const [successMsg, setSuccessMsg] = useState('');
+  const [pageError, setPageError] = useState('');
 
   const loadData = async () => {
     try {
       setLoading(true);
+      setPageError('');
       const data = await dataService.getInvestors();
       setInvestors(data);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      console.error('Gagal memuat data investor:', e);
+      setPageError(e.message || 'Gagal memuat data investor dari database.');
     } finally {
       setLoading(false);
     }
@@ -156,6 +165,30 @@ export default function DividenBrilinkPage() {
     }
   };
 
+  // Penghapusan Permanen Investor
+  const handleOpenDelete = (inv: Investor) => {
+    setDeleteError('');
+    setDeleteConfirm(inv);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirm || deleting) return;
+
+    try {
+      setDeleting(true);
+      setDeleteError('');
+      await dataService.deleteInvestor(deleteConfirm.id);
+      notify(`Data investor "${deleteConfirm.name}" berhasil dihapus.`);
+      setDeleteConfirm(null);
+      await loadData();
+    } catch (err: any) {
+      console.error('Error deleting investor:', err);
+      setDeleteError(err.message || 'Gagal menghapus data investor dari database.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const activeInvestors = investors.filter((i) => i.status === 'active');
   const totalActivePrincipal = activeInvestors.reduce(
     (sum, i) => sum + (Number(i.investment_amount) || 0),
@@ -223,7 +256,7 @@ export default function DividenBrilinkPage() {
             <strong>Syarat Kondisi Bulan Penuh:</strong> Jika durasi investasi <strong>kurang dari 1 bulan (&lt; 30 hari)</strong>, komisi tidak terhitung (<code className="bg-white px-1.5 py-0.5 rounded border border-rose-200 text-rose-700 font-bold">Rp 0</code> / Status: <em>&ldquo;Belum Cukup 1 Bulan&rdquo;</em>).
           </li>
           <li>
-            Jika sudah <strong>&ge; 1 bulan</strong>, sistem menampilkan komisi per bulan beserta total akumulasi komisi yang diperoleh.
+            Jika sudah <strong>&ge; 1 bulan</strong>, sistem menampilkan komisi per bulan beserta akumulasi komisi s.d. bulan berjalan.
           </li>
         </ul>
       </div>
@@ -233,6 +266,22 @@ export default function DividenBrilinkPage() {
         <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2 animate-in fade-in">
           <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>{successMsg}</span>
+        </div>
+      )}
+
+      {/* Error Alert */}
+      {pageError && (
+        <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{pageError}</span>
+          </div>
+          <button
+            onClick={() => setPageError('')}
+            className="text-rose-500 hover:text-rose-700 font-bold text-xs cursor-pointer"
+          >
+            Tutup
+          </button>
         </div>
       )}
 
@@ -283,9 +332,9 @@ export default function DividenBrilinkPage() {
                 <th className="py-3 px-4">Tanggal Masuk</th>
                 <th className="py-3 px-4 text-center">Durasi / Status Bulan</th>
                 <th className="py-3 px-4 text-right">Komisi yang Diperoleh / Bulan (Rp)</th>
-                <th className="py-3 px-4 text-right">Total Akumulasi Komisi (Rp)</th>
+                <th className="py-3 px-4 text-right">Akumulasi Komisi s.d. Bulan Berjalan (Rp)</th>
                 <th className="py-3 px-4 text-center">Status</th>
-                <th className="py-3 px-4 text-center w-28">Aksi</th>
+                <th className="py-3 px-4 text-center w-32">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
@@ -327,9 +376,9 @@ export default function DividenBrilinkPage() {
                         </span>
                       )}
                     </td>
-                    {/* Total Akumulasi Komisi */}
+                    {/* Akumulasi Komisi s.d. Bulan Berjalan */}
                     <td className="py-3.5 px-4 text-right font-black text-emerald-700">
-                      {formatRupiah(inv.total_commission_earned)}
+                      {formatRupiah(inv.total_commission_earned || 0)}
                     </td>
                     <td className="py-3.5 px-4 text-center">
                       <span
@@ -346,7 +395,7 @@ export default function DividenBrilinkPage() {
                       <div className="inline-flex items-center gap-1">
                         <button
                           onClick={() => handleOpenModal(inv)}
-                          className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 cursor-pointer transition-colors"
                           title="Edit Investor"
                         >
                           <Edit className="w-3.5 h-3.5" />
@@ -354,12 +403,19 @@ export default function DividenBrilinkPage() {
                         {inv.status === 'active' && (
                           <button
                             onClick={() => handleOpenTerminate(inv)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50"
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 cursor-pointer transition-colors"
                             title="Penghentian / Kembalikan Pokok"
                           >
                             <UserCheck className="w-3.5 h-3.5" />
                           </button>
                         )}
+                        <button
+                          onClick={() => handleOpenDelete(inv)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer transition-colors"
+                          title="Hapus Investor"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -527,18 +583,76 @@ export default function DividenBrilinkPage() {
                 <button
                   type="button"
                   onClick={() => setTerminateModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-md shadow-rose-600/20"
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-md shadow-rose-600/20 cursor-pointer"
                 >
                   Konfirmasi Penghentian
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL KONFIRMASI HAPUS INVESTOR ================= */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-xl border border-slate-100 animate-in zoom-in-95">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-1.5">
+              <h3 className="text-base font-black text-slate-900">Hapus Data Investor?</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Investor <strong>{deleteConfirm.name}</strong> dengan pokok investasi{' '}
+                <strong>{formatRupiah(deleteConfirm.investment_amount)}</strong> akan dihapus secara permanen.
+              </p>
+              <p className="text-[11px] text-rose-600 bg-rose-50/70 p-2.5 rounded-xl border border-rose-100 font-medium leading-relaxed text-left">
+                ⚠️ <strong>Peringatan:</strong> Penghapusan ini bersifat permanen. Seluruh riwayat komisi dividen yang terhubung dengan investor ini akan otomatis ikut terhapus dari sistem.
+              </p>
+            </div>
+
+            {deleteError && (
+              <div className="flex items-start gap-2 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs animate-in fade-in">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <span className="flex-1">{deleteError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirm(null);
+                  setDeleteError('');
+                }}
+                disabled={deleting}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={deleting}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-md shadow-rose-600/20 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menghapus...</span>
+                  </>
+                ) : (
+                  <span>Ya, Hapus</span>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
